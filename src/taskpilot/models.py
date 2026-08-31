@@ -1,4 +1,4 @@
-"""Structured models used by TaskPilot's task state."""
+"""TaskPilot 任务状态使用的结构化数据模型。"""
 
 from enum import Enum
 from typing import Any
@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class PlanStepStatus(str, Enum):
-    """Lifecycle states for a plan step."""
+    """单个计划步骤的生命周期状态。"""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -17,7 +17,7 @@ class PlanStepStatus(str, Enum):
 
 
 class ToolCallStatus(str, Enum):
-    """Lifecycle states for a tool call."""
+    """一次工具调用的生命周期状态。"""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -26,7 +26,7 @@ class ToolCallStatus(str, Enum):
 
 
 class TaskStatus(str, Enum):
-    """Lifecycle states for an entire task."""
+    """整个任务的生命周期状态。"""
 
     CREATED = "created"
     RUNNING = "running"
@@ -37,26 +37,34 @@ class TaskStatus(str, Enum):
 
 
 class TaskSpec(BaseModel):
-    """Normalized description of a user's task."""
+    """对用户任务进行规范化描述。"""
 
     goal: str
+    # 每个模型实例都创建独立容器，避免可变默认值在实例之间共享。
     constraints: dict[str, Any] = Field(default_factory=dict)
     expected_output: str | None = None
     completion_criteria: list[str] = Field(default_factory=list)
 
 
 class PlanStep(BaseModel):
-    """One executable step in a task plan."""
+    """任务计划中的一个可执行步骤。"""
 
     id: int
     description: str
     status: PlanStepStatus = PlanStepStatus.PENDING
     retry_count: int = 0
     depends_on: list[int] = Field(default_factory=list)
+    success_criteria: list[str] = Field(default_factory=list)
+
+
+class TaskPlan(BaseModel):
+    """Initial Planner 生成的结构化任务计划。"""
+
+    steps: list[PlanStep]
 
 
 class ToolCallRecord(BaseModel):
-    """Raw execution record for a tool invocation."""
+    """一次工具调用的原始执行记录。"""
 
     call_id: str
     step_id: int | None = None
@@ -68,10 +76,9 @@ class ToolCallRecord(BaseModel):
 
 
 class VerificationResult(BaseModel):
-    """Outcome of checking task completion criteria."""
+    """任务完成条件的校验结果。"""
 
     completed: bool
     reason: str
     missing_requirements: list[str] = Field(default_factory=list)
     next_action: str | None = None
-

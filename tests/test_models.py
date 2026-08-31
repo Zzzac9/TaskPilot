@@ -1,4 +1,4 @@
-"""Tests for TaskPilot's structured models."""
+"""TaskPilot 结构化模型测试。"""
 
 from taskpilot.models import PlanStep, PlanStepStatus, TaskSpec, VerificationResult
 
@@ -22,6 +22,7 @@ def test_plan_step_defaults() -> None:
     assert step.status is PlanStepStatus.PENDING
     assert step.retry_count == 0
     assert step.depends_on == []
+    assert step.success_criteria == []
 
 
 def test_mutable_defaults_are_not_shared() -> None:
@@ -33,10 +34,12 @@ def test_mutable_defaults_are_not_shared() -> None:
     first_spec.constraints["region"] = "Hong Kong Island"
     first_spec.completion_criteria.append("Complete")
     first_step.depends_on.append(99)
+    first_step.success_criteria.append("First step is complete")
 
     assert second_spec.constraints == {}
     assert second_spec.completion_criteria == []
     assert second_step.depends_on == []
+    assert second_step.success_criteria == []
 
 
 def test_verification_result_can_be_created() -> None:
@@ -50,4 +53,3 @@ def test_verification_result_can_be_created() -> None:
     assert result.completed is False
     assert result.missing_requirements == ["CSV output"]
     assert result.next_action == "Generate the CSV"
-
