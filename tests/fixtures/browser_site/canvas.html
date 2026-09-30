@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>TaskPilot Canvas Fixture</title>
+    <style>
+      body { margin: 0; font-family: sans-serif; }
+      h1 { margin: 20px 40px 8px; }
+      canvas { display: block; margin: 20px 40px; border: 1px solid #333; }
+      #canvas-status { margin: 12px 40px; }
+    </style>
+  </head>
+  <body>
+    <h1>Canvas Interaction Fixture</h1>
+    <canvas id="action-canvas" width="320" height="120"></canvas>
+    <p id="canvas-status">Canvas not clicked.</p>
+    <script>
+      const canvas = document.getElementById("action-canvas");
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#1769aa";
+      context.fillRect(40, 30, 240, 60);
+      context.fillStyle = "white";
+      context.font = "bold 22px sans-serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText("Canvas Action", 160, 60);
+      canvas.addEventListener("click", (event) => {
+        const bounds = canvas.getBoundingClientRect();
+        const x = event.clientX - bounds.left;
+        const y = event.clientY - bounds.top;
+        if (x >= 40 && x <= 280 && y >= 30 && y <= 90) {
+          document.getElementById("canvas-status").textContent = "Canvas clicked.";
+        }
+      });
+    </script>
+  </body>
+</html>

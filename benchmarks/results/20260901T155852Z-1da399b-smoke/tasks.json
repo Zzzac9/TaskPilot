@@ -1,0 +1,94 @@
+[
+  {
+    "id": "mcp_record_02",
+    "category": "mcp",
+    "prompt": "Look up product p100 through MCP and return its name, price, and stock as structured output.",
+    "requires_browser": false,
+    "requires_mcp": true,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "p100",
+          "path": "step_results.*.output",
+          "contains": {
+            "name": "Atlas Keyboard",
+            "price": 699,
+            "stock": 8
+          }
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "mcp",
+      "record",
+      "stability"
+    ],
+    "timeout_seconds": 90.0
+  },
+  {
+    "id": "browser_table_03",
+    "category": "browser_dom",
+    "prompt": "Open http://127.0.0.1:1742/table.html and extract the row for product p300 as structured fields.",
+    "requires_browser": true,
+    "requires_mcp": false,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "p300_row",
+          "path": "step_results.*.output",
+          "contains": {
+            "id": "p300",
+            "name": "Cedar Stand",
+            "price": 459,
+            "stock": 12
+          }
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "browser",
+      "table",
+      "stability"
+    ],
+    "timeout_seconds": 120.0
+  },
+  {
+    "id": "aggregate_cross_source_01",
+    "category": "constraint_aggregation",
+    "prompt": "Compare MCP gym candidates with http://127.0.0.1:1742/listings.html and return the names that both sources show below HKD 500.",
+    "requires_browser": true,
+    "requires_mcp": true,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "intersection",
+          "path": "step_results.*.output",
+          "contains": [
+            "Harbor Gym",
+            "Peak Fitness",
+            "Island Strength"
+          ]
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "aggregation",
+      "mcp",
+      "browser",
+      "stability"
+    ],
+    "timeout_seconds": 210.0
+  }
+]

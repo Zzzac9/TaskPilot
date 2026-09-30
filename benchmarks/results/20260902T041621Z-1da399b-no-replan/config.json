@@ -1,0 +1,8 @@
+{
+  "run_id": "20260902T041621Z-1da399b-no-replan",
+  "label": "no-replan",
+  "max_replans": 0,
+  "temperature": 0,
+  "seed": "unavailable",
+  "scripted_human_only": true
+}

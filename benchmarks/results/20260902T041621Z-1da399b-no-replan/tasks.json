@@ -1,0 +1,115 @@
+[
+  {
+    "id": "replan_mcp_01",
+    "category": "replanning",
+    "prompt": "Find the support email. You must try MCP Source A first; if it is unavailable, recover using another available source and return the value plus the successful source.",
+    "requires_browser": false,
+    "requires_mcp": true,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "alternate_email",
+          "path": "step_results.*.output",
+          "contains": {
+            "value": "support@taskpilot.local",
+            "source": "B"
+          }
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "replan",
+      "dead_end",
+      "stability"
+    ],
+    "timeout_seconds": 210.0
+  },
+  {
+    "id": "replan_browser_02",
+    "category": "replanning",
+    "prompt": "Open http://127.0.0.1:4694/source-a.html to find the warehouse. When the page reports no result, recover through its alternate source and return the warehouse and source name.",
+    "requires_browser": true,
+    "requires_mcp": false,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "alternate_warehouse",
+          "path": "step_results.*.output",
+          "contains": {
+            "warehouse": "Kowloon Bay",
+            "source": "B"
+          }
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "replan",
+      "dead_end",
+      "stability"
+    ],
+    "timeout_seconds": 210.0
+  },
+  {
+    "id": "replan_mcp_03",
+    "category": "replanning",
+    "prompt": "Find policy_version. First query MCP Source A; after its controlled failure use an alternate source and return the valid value with evidence.",
+    "requires_browser": false,
+    "requires_mcp": true,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "alternate_policy",
+          "path": "step_results.*.output",
+          "contains": "2026.09"
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "replan",
+      "dead_end",
+      "stability"
+    ],
+    "timeout_seconds": 210.0
+  },
+  {
+    "id": "replan_cross_04",
+    "category": "replanning",
+    "prompt": "Try MCP Source A for fallback_code. If it fails, recover by browsing http://127.0.0.1:4694/source-b.html and return the code and successful source.",
+    "requires_browser": true,
+    "requires_mcp": true,
+    "requires_vision": false,
+    "requires_approval": false,
+    "oracle_type": "state_contains",
+    "oracle_config": {
+      "checks": [
+        {
+          "name": "alternate_code",
+          "path": "step_results.*.output",
+          "contains": {
+            "fallback_code": "ALT-204",
+            "source": "B"
+          }
+        }
+      ]
+    },
+    "tags": [
+      "primary",
+      "replan",
+      "dead_end",
+      "stability"
+    ],
+    "timeout_seconds": 240.0
+  }
+]

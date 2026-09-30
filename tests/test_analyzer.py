@@ -1,8 +1,20 @@
 """Task Analyzer 与 Phase 2 图的离线测试。"""
 
+import pytest
+
 from taskpilot.analyzer import ANALYZER_SYSTEM_PROMPT
+from taskpilot.executor import ExecutorRunResult
 from taskpilot.graph import analyze_task, build_graph
-from taskpilot.models import PlanStep, TaskPlan, TaskSpec, TaskStatus
+from taskpilot.models import (
+    CriterionCheck,
+    PlanStep,
+    StepExecutionOutcome,
+    StepVerificationResult,
+    TaskPlan,
+    TaskSpec,
+    TaskStatus,
+    VerificationResult,
+)
 from taskpilot.state import TaskState
 
 
@@ -38,9 +50,15 @@ def make_initial_state() -> TaskState:
         "task_spec": None,
         "plan": [],
         "current_step_id": None,
+        "step_outcome": None,
+        "step_results": [],
+        "step_verification": None,
         "tool_calls": [],
         "task_results": {},
         "verification": None,
+        "pending_action": None,
+        "policy_decisions": [],
+        "approval_records": [],
         "status": TaskStatus.CREATED,
         "error": None,
     }
@@ -74,6 +92,52 @@ class FakePlanner:
         )
 
 
+class FakeExecutor:
+    """为 Analyzer 图测试提供最小步骤执行声明。"""
+
+    async def execute(
+        self,
+        *,
+        task_spec,
+        step,
+        task_results,
+        tool_calls,
+        step_results,
+        verification_feedback,
+        policy_decisions,
+        approval_records,
+    ):
+        return ExecutorRunResult(
+            outcome=StepExecutionOutcome(
+                step_id=step.id,
+                claimed_complete=True,
+                summary="Fake execution",
+                evidence=["Fake evidence"],
+                output={"result": "fake"},
+                action_count=1,
+            )
+        )
+
+
+class FakeVerifier:
+    def verify_step(self, *, task_spec, step, outcome, tool_calls, dependency_results):
+        return StepVerificationResult(
+            step_id=step.id,
+            verified=True,
+            checks=[
+                CriterionCheck(
+                    criterion_index=index,
+                    satisfied=True,
+                    reason="Accepted offline",
+                )
+                for index, _ in enumerate(step.success_criteria)
+            ],
+        )
+
+    def verify_task(self, *, task_spec, step_results, task_results):
+        return VerificationResult(completed=True, reason="Accepted offline")
+
+
 def test_analyze_task_writes_structured_task_spec() -> None:
     expected = make_task_spec()
     update = analyze_task(make_initial_state(), analyzer=FakeAnalyzer(expected))
@@ -86,23 +150,32 @@ def test_analyze_task_writes_structured_task_spec() -> None:
     assert task_spec.completion_criteria
 
 
-def test_graph_runs_initialize_then_analyze() -> None:
+@pytest.mark.asyncio
+async def test_graph_runs_initialize_then_analyze() -> None:
     initial_state = make_initial_state()
-    result = build_graph(
+    result = await build_graph(
         analyzer=FakeAnalyzer(make_task_spec()),
         planner=FakePlanner(),
-    ).invoke(initial_state)
+        executor=FakeExecutor(),
+        verifier=FakeVerifier(),
+    ).ainvoke(initial_state)
 
     assert result["task_id"] == initial_state["task_id"]
     assert result["user_input"] == initial_state["user_input"]
-    assert result["status"] is TaskStatus.RUNNING
+    assert result["status"] is TaskStatus.COMPLETED
     assert result["task_spec"] is not None
 
 
-def test_graph_calls_analyzer_once() -> None:
+@pytest.mark.asyncio
+async def test_graph_calls_analyzer_once() -> None:
     analyzer = FakeAnalyzer(make_task_spec())
 
-    build_graph(analyzer=analyzer, planner=FakePlanner()).invoke(
+    await build_graph(
+        analyzer=analyzer,
+        planner=FakePlanner(),
+        executor=FakeExecutor(),
+        verifier=FakeVerifier(),
+    ).ainvoke(
         make_initial_state()
     )
 

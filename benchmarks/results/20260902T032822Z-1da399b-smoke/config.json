@@ -1,0 +1,8 @@
+{
+  "run_id": "20260902T032822Z-1da399b-smoke",
+  "label": "smoke",
+  "max_replans": 2,
+  "temperature": 0,
+  "seed": "unavailable",
+  "scripted_human_only": true
+}

@@ -4,7 +4,7 @@ from typing import Protocol
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from taskpilot.llm import create_chat_model
+from taskpilot.llm import create_chat_model, invoke_structured_with_retry
 from taskpilot.models import TaskSpec
 
 
@@ -13,6 +13,7 @@ ANALYZER_SYSTEM_PROMPT = """你是 Task Analyzer，只负责把用户任务结�
 constraints 应忠实保留用户明确提出的数字、位置、格式和时间等要求；未指定的要求不要虚构。
 用户没有指定具体输出格式时，expected_output 应为 null。
 completion_criteria 必须描述用户目标真正完成时可验证的成功条件，不能写成搜索、点击、提取等执行步骤。
+字符串内容需要引用关键词时优先使用中文引号；使用 ASCII 双引号时必须符合 JSON 转义规则。
 输出必须符合 TaskSpec schema，包含 goal、constraints、expected_output 和 completion_criteria。"""
 
 
@@ -37,13 +38,11 @@ class TaskAnalyzer:
         if self._model is None:
             # 延迟创建模型，使导入模块和离线构图不要求存在 API Key。
             self._model = create_chat_model()
-        structured_model = self._model.with_structured_output(TaskSpec)
-        result = structured_model.invoke(
+        return invoke_structured_with_retry(
+            self._model,
+            TaskSpec,
             [
                 ("system", ANALYZER_SYSTEM_PROMPT),
                 ("human", user_input),
-            ]
+            ],
         )
-        if isinstance(result, TaskSpec):
-            return result
-        return TaskSpec.model_validate(result)

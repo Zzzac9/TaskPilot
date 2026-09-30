@@ -1,0 +1,47 @@
+[
+  {
+    "case_id": "terminal_journal_crash",
+    "mechanism": "terminal journal committed then graph checkpoint crash",
+    "pytest_node_id": "tests/test_phase9_recovery.py::test_terminal_journal_deduplicates_after_graph_checkpoint_crash"
+  },
+  {
+    "case_id": "unsafe_ambiguous_abort",
+    "mechanism": "unsafe side effect then crash requires Human recovery",
+    "pytest_node_id": "tests/test_phase9_recovery.py::test_unsafe_started_interrupts_and_abort_does_not_replay"
+  },
+  {
+    "case_id": "one_shot_retry_second_crash",
+    "mechanism": "Human RETRY permit is consumed before another crash",
+    "pytest_node_id": "tests/test_phase9_recovery.py::test_unsafe_human_retry_is_one_shot_after_second_crash"
+  },
+  {
+    "case_id": "durable_nonbrowser_approval",
+    "mechanism": "non-browser approval survives checkpointer reconstruction",
+    "pytest_node_id": "tests/test_phase9_recovery.py::test_high_risk_approval_survives_checkpointer_recreation"
+  },
+  {
+    "case_id": "browser_same_runtime",
+    "mechanism": "same-Service Browser approval retains live page",
+    "pytest_node_id": "tests/test_phase11_api.py::test_real_browser_high_risk_approval_reuses_task_scoped_runtime"
+  },
+  {
+    "case_id": "browser_recreation_fail_closed",
+    "mechanism": "recreated Service refuses stale Browser approval",
+    "pytest_node_id": "tests/test_phase11_api.py::test_recreated_service_fails_closed_for_pending_browser_approval"
+  },
+  {
+    "case_id": "vision_approval_boundary",
+    "mechanism": "Vision targeter and click remain after approval boundary",
+    "pytest_node_id": "tests/test_phase11_api.py::test_real_canvas_vision_approval_via_api_uses_same_live_runtime"
+  },
+  {
+    "case_id": "context_budget_core",
+    "mechanism": "core context overflow fails without silent truncation",
+    "pytest_node_id": "tests/test_phase10_graph.py::test_context_overflow_is_graph_failure_without_model_or_tool_call"
+  },
+  {
+    "case_id": "replan_fresh_identity",
+    "mechanism": "new plan revision uses fresh step/action identity",
+    "pytest_node_id": "tests/test_phase10_graph.py::test_step_failure_replans_with_fresh_id_and_preserves_history"
+  }
+]

@@ -1,0 +1,200 @@
+[
+  {
+    "case_id": "terminal_journal_crash",
+    "mechanism": "terminal journal committed then graph checkpoint crash",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase9_recovery.py::test_terminal_journal_deduplicates_after_graph_checkpoint_crash"
+    ],
+    "exit_code": 0,
+    "output": "TERMINAL_JOURNAL_CRASH_SMOKE={\"injected_crash\": true, \"journal_status\": \"succeeded\", \"tool_counter_after_execution\": 1, \"tool_counter_before\": 0, \"tool_counter_final\": 1, \"tool_reinvoked\": false}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.40s\n"
+  },
+  {
+    "case_id": "unsafe_ambiguous_abort",
+    "mechanism": "unsafe side effect then crash requires Human recovery",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 1,
+    "recovery_cases_resolved": 1,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase9_recovery.py::test_unsafe_started_interrupts_and_abort_does_not_replay"
+    ],
+    "exit_code": 0,
+    "output": "AMBIGUOUS_UNSAFE_CRASH_SMOKE={\"automatic_retry\": false, \"journal\": \"started\", \"recovery_interrupt\": true, \"replay_safe\": false, \"side_effect_counter\": 1}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.42s\n"
+  },
+  {
+    "case_id": "one_shot_retry_second_crash",
+    "mechanism": "Human RETRY permit is consumed before another crash",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 1,
+    "recovery_cases_resolved": 1,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase9_recovery.py::test_unsafe_human_retry_is_one_shot_after_second_crash"
+    ],
+    "exit_code": 0,
+    "output": "ONE_SHOT_RECOVERY_SMOKE={\"automatic_third_invoke\": false, \"counter_after_first_ambiguous\": 1, \"counter_after_human_retry\": 2, \"second_crash\": true, \"second_recovery_interrupt\": true}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.45s\n"
+  },
+  {
+    "case_id": "durable_nonbrowser_approval",
+    "mechanism": "non-browser approval survives checkpointer reconstruction",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase9_recovery.py::test_high_risk_approval_survives_checkpointer_recreation"
+    ],
+    "exit_code": 0,
+    "output": "DURABLE_APPROVAL_SMOKE={\"pending_approval_restored\": true, \"runtime_recreated\": true, \"status\": \"completed\", \"tool_counter_after_approval\": 1, \"tool_counter_before_approval\": 0}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.39s\n"
+  },
+  {
+    "case_id": "browser_same_runtime",
+    "mechanism": "same-Service Browser approval retains live page",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase11_api.py::test_real_browser_high_risk_approval_reuses_task_scoped_runtime"
+    ],
+    "exit_code": 0,
+    "output": "FASTAPI_BROWSER_HITL_SMOKE={\"waiting_approval\": true, \"same_live_browser_runtime\": true, \"side_effect_before_approval\": false, \"side_effect_after_approval\": true, \"final_status\": \"completed\"}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 2.39s\n"
+  },
+  {
+    "case_id": "browser_recreation_fail_closed",
+    "mechanism": "recreated Service refuses stale Browser approval",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase11_api.py::test_recreated_service_fails_closed_for_pending_browser_approval"
+    ],
+    "exit_code": 0,
+    "output": ".\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 2.39s\n"
+  },
+  {
+    "case_id": "vision_approval_boundary",
+    "mechanism": "Vision targeter and click remain after approval boundary",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase11_api.py::test_real_canvas_vision_approval_via_api_uses_same_live_runtime"
+    ],
+    "exit_code": 0,
+    "output": "FASTAPI_VISION_HITL_SMOKE={\"waiting_approval\": true, \"same_live_browser_runtime\": true, \"side_effect_before_approval\": false, \"vision_called_before_approval\": false, \"side_effect_after_approval\": true, \"final_status\": \"completed\"}\n.\n============================== warnings summary ===============================\n.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18\n  D:\\Desktop\\TaskPilot\\.venv-benchmark\\Lib\\site-packages\\langgraph\\checkpoint\\base\\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 2.84s\n"
+  },
+  {
+    "case_id": "context_budget_core",
+    "mechanism": "core context overflow fails without silent truncation",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase10_graph.py::test_context_overflow_is_graph_failure_without_model_or_tool_call"
+    ],
+    "exit_code": 0,
+    "output": "CONTEXT_OVERFLOW_GRAPH_SMOKE={\"graph_exception\": false, \"model_invoked\": false, \"task_status\": \"failed\"}\n.\n============================== warnings summary ===============================\nsrc\\taskpilot\\persistence\\checkpoint.py:8\n  D:\\Desktop\\TaskPilot\\src\\taskpilot\\persistence\\checkpoint.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.33s\n"
+  },
+  {
+    "case_id": "replan_fresh_identity",
+    "mechanism": "new plan revision uses fresh step/action identity",
+    "passed": true,
+    "safe_recovery": true,
+    "duplicate_unsafe_side_effects": 0,
+    "terminal_journal_dedup_failures": 0,
+    "recovery_interrupts_required": 0,
+    "recovery_cases_resolved": 0,
+    "browser_stale_runtime_executions": 0,
+    "unauthorized_side_effects_before_approval": 0,
+    "command": [
+      "D:\\Desktop\\TaskPilot\\.venv-benchmark\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-s",
+      "tests/test_phase10_graph.py::test_step_failure_replans_with_fresh_id_and_preserves_history"
+    ],
+    "exit_code": 0,
+    "output": "REPLAN_TRACE_REVISION_SMOKE={\"payload_revision\": 1, \"trace_event_revision\": 1}\nREPLAN_STEP_FAILURE_SMOKE={\"completed_old_step_rerun\": false, \"failed_step_id\": 2, \"initial_revision\": 0, \"new_revision\": 1, \"new_step_ids\": [4, 5], \"replan_count\": 1, \"replan_trigger\": \"step_attempts_exhausted\", \"task_status\": \"completed\"}\n.\n============================== warnings summary ===============================\nsrc\\taskpilot\\persistence\\checkpoint.py:8\n  D:\\Desktop\\TaskPilot\\src\\taskpilot\\persistence\\checkpoint.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.\n    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n1 passed, 1 warning in 1.33s\n"
+  }
+]

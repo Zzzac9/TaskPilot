@@ -1,0 +1,98 @@
+{
+  "run_id": "20260902T033133Z-1da399b-smoke",
+  "declared_tasks": 3,
+  "eligible_tasks": 3,
+  "not_run_tasks": 0,
+  "executed_tasks": 3,
+  "succeeded_tasks": 1,
+  "failed_tasks": 2,
+  "task_success_rate": {
+    "numerator": 1,
+    "denominator": 3,
+    "percentage": 33.33333333333333,
+    "confidence_95": {
+      "lower": 0.06149194472039621,
+      "upper": 0.7923403991979522
+    }
+  },
+  "false_completion_rate": {
+    "numerator": 0,
+    "denominator": 3,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "average_tool_calls_per_task": 0.6666666666666666,
+  "average_tool_calls_per_successful_task": 2.0,
+  "tool_failure_rate": {
+    "numerator": 0,
+    "denominator": 2,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "average_replans_per_task": 0.0,
+  "replan_trigger_rate": {
+    "numerator": 0,
+    "denominator": 3,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "replan_recovery_rate": {
+    "numerator": 0,
+    "denominator": 0,
+    "percentage": null,
+    "confidence_95": null
+  },
+  "step_rejection_rate": {
+    "numerator": 0,
+    "denominator": 3,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "approval_request_rate": {
+    "numerator": 0,
+    "denominator": 3,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "mean_wall_latency_ms": 15977.451033346975,
+  "median_wall_latency_ms": 16770.069300022442,
+  "p95_wall_latency_ms": 17361.44820001209,
+  "category_results": [
+    {
+      "category": "browser_dom",
+      "success": {
+        "numerator": 0,
+        "denominator": 1,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.7934506856227626
+        }
+      }
+    },
+    {
+      "category": "constraint_aggregation",
+      "success": {
+        "numerator": 0,
+        "denominator": 1,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.7934506856227626
+        }
+      }
+    },
+    {
+      "category": "mcp",
+      "success": {
+        "numerator": 1,
+        "denominator": 1,
+        "percentage": 100.0,
+        "confidence_95": {
+          "lower": 0.20654931437723745,
+          "upper": 1.0
+        }
+      }
+    }
+  ]
+}

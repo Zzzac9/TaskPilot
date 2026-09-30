@@ -275,9 +275,16 @@ proxies.txt
 cookies.json
 *.html
 !web/index.html
+!tests/fixtures/browser_site/*.html
 screenshots/
 downloads/
 crawled_data/
+
+# TaskPilot Browser Tool 运行产物
+artifacts/browser/
+tests/.artifacts/
+tests/.tmp/
+.taskpilot/
 
 # 临时文件
 tmp/
@@ -337,5 +344,4 @@ $RECYCLE.BIN/
 *.bak
 *.backup
 *~
-
-docs/
+.venv-benchmark/

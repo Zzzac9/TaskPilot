@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Delayed DOM Fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Delayed DOM Fixture</h1>
+      <section id="mount"></section>
+      <p id="delayed-result">Waiting for delayed action.</p>
+    </main>
+    <script>
+      window.setTimeout(() => {
+        document.querySelector("#mount").innerHTML = `
+          <label for="late-input">Late Input</label>
+          <input id="late-input">
+          <button type="button" id="late-apply">Late Apply</button>
+        `;
+        document.querySelector("#late-apply").addEventListener("click", () => {
+          const value = document.querySelector("#late-input").value;
+          document.querySelector("#delayed-result").textContent = `Late value: ${value}`;
+        });
+      }, 500);
+    </script>
+  </body>
+</html>

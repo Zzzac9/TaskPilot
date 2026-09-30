@@ -1,6 +1,15 @@
 """TaskPilot 结构化模型测试。"""
 
-from taskpilot.models import PlanStep, PlanStepStatus, TaskSpec, VerificationResult
+from taskpilot.models import (
+    CriterionCheck,
+    PlanStep,
+    PlanStepStatus,
+    StepExecutionOutcome,
+    StepResult,
+    StepVerificationResult,
+    TaskSpec,
+    VerificationResult,
+)
 
 
 def test_task_spec_can_be_created() -> None:
@@ -53,3 +62,46 @@ def test_verification_result_can_be_created() -> None:
     assert result.completed is False
     assert result.missing_requirements == ["CSV output"]
     assert result.next_action == "Generate the CSV"
+
+
+def test_step_execution_outcome_evidence_is_not_shared() -> None:
+    first = StepExecutionOutcome(step_id=1)
+    second = StepExecutionOutcome(step_id=2)
+
+    first.evidence.append("offline evidence")
+    first.output["candidate"] = "A"
+
+    assert first.claimed_complete is False
+    assert first.action_count == 0
+    assert first.evidence == ["offline evidence"]
+    assert second.evidence == []
+    assert second.output == {}
+
+
+def test_step_result_mutable_defaults_are_not_shared() -> None:
+    first = StepResult(step_id=1, summary="First")
+    second = StepResult(step_id=2, summary="Second")
+
+    first.output["items"] = ["A"]
+    first.evidence.append("Evidence A")
+
+    assert second.output == {}
+    assert second.evidence == []
+
+
+def test_step_verification_result_can_be_created() -> None:
+    result = StepVerificationResult(
+        step_id=1,
+        verified=True,
+        checks=[
+            CriterionCheck(
+                criterion_index=0,
+                satisfied=True,
+                reason="Evidence is present",
+            )
+        ],
+    )
+
+    assert result.step_id == 1
+    assert result.verified is True
+    assert result.checks[0].criterion_index == 0

@@ -4,7 +4,7 @@ from typing import Protocol
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from taskpilot.llm import create_chat_model
+from taskpilot.llm import create_chat_model, invoke_structured_with_retry
 from taskpilot.models import TaskPlan, TaskSpec
 
 
@@ -34,7 +34,12 @@ def validate_plan(task_plan: TaskPlan) -> None:
     step_ids = [step.id for step in task_plan.steps]
     if len(step_ids) != len(set(step_ids)):
         raise ValueError("PlanStep.id 必须唯一")
-
+    if any(step_id < 1 for step_id in step_ids):
+        raise ValueError("Initial PlanStep.id 必须是正整数")
+    if step_ids != sorted(step_ids) or any(
+        right <= left for left, right in zip(step_ids, step_ids[1:])
+    ):
+        raise ValueError("Initial PlanStep.id 必须严格递增")
     step_positions = {step_id: index for index, step_id in enumerate(step_ids)}
     for index, step in enumerate(task_plan.steps):
         if not step.success_criteria:
@@ -64,15 +69,16 @@ class TaskPlanner:
         if self._model is None:
             # 与 Analyzer 一样延迟创建模型，保证默认测试无需 API Key。
             self._model = create_chat_model()
-        structured_model = self._model.with_structured_output(TaskPlan)
-        result = structured_model.invoke(
+        task_plan = invoke_structured_with_retry(
+            self._model,
+            TaskPlan,
             [
                 ("system", PLANNER_SYSTEM_PROMPT),
                 ("human", "TaskSpec:\n" + task_spec.model_dump_json(indent=2)),
-            ]
-        )
-        task_plan = (
-            result if isinstance(result, TaskPlan) else TaskPlan.model_validate(result)
+            ],
         )
         validate_plan(task_plan)
-        return task_plan
+        # revision 属于 Graph 控制信息，不信任模型生成值。
+        return TaskPlan(
+            steps=[step.model_copy(update={"revision": 0}) for step in task_plan.steps]
+        )

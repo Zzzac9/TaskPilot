@@ -1,0 +1,16 @@
+# Runtime Reliability / Safety Benchmark
+
+This suite is separate from Primary Real-LLM Task Success Rate.
+
+```json
+{
+  "cases_total": 9,
+  "cases_passed": 9,
+  "duplicate_unsafe_side_effects": 0,
+  "terminal_journal_dedup_failures": 0,
+  "recovery_interrupts_required": 2,
+  "recovery_cases_resolved": 2,
+  "browser_stale_runtime_executions": 0,
+  "unauthorized_side_effects_before_approval": 0
+}
+```

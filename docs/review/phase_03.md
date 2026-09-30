@@ -611,8 +611,8 @@ def make_task_plan() -> TaskPlan:
         steps=[
             PlanStep(
                 id=1,
-                description="识别符合地点和价格约束的候选健身房",
-                success_criteria=["获得不少于3个可进一步核实的候选"],
+                description="发现一批与目标地点相关、可进一步核实的候选健身房",
+                success_criteria=["获得一批与目标地点相关的候选"],
             ),
             PlanStep(
                 id=2,
@@ -626,7 +626,7 @@ def make_task_plan() -> TaskPlan:
             ),
             PlanStep(
                 id=3,
-                description="根据任务约束筛选并确认最终候选",
+                description="根据地点、价格和数量要求筛选最终候选",
                 depends_on=[2],
                 success_criteria=[
                     "最终候选数量不少于3家",
@@ -961,9 +961,9 @@ conda run -n ai python -m pytest -q
 #### Step 1
 
 - `id`: `1`
-- `description`: `识别符合地点和价格约束的候选健身房`
+- `description`: `发现一批与目标地点相关、可进一步核实的候选健身房`
 - `depends_on`: `[]`
-- `success_criteria`: `["获得不少于3个可进一步核实的候选"]`
+- `success_criteria`: `["获得一批与目标地点相关的候选"]`
 - `status`: `pending`
 - `retry_count`: `0`
 
@@ -979,7 +979,7 @@ conda run -n ai python -m pytest -q
 #### Step 3
 
 - `id`: `3`
-- `description`: `根据任务约束筛选并确认最终候选`
+- `description`: `根据地点、价格和数量要求筛选最终候选`
 - `depends_on`: `[2]`
 - `success_criteria`: `["最终候选数量不少于3家", "最终候选满足地点和价格约束"]`
 - `status`: `pending`

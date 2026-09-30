@@ -1,0 +1,134 @@
+{
+  "run_id": "20260902T042251Z-1da399b-stability-3",
+  "declared_tasks": 10,
+  "eligible_tasks": 10,
+  "not_run_tasks": 0,
+  "executed_tasks": 10,
+  "succeeded_tasks": 2,
+  "failed_tasks": 8,
+  "task_success_rate": {
+    "numerator": 2,
+    "denominator": 10,
+    "percentage": 20.0,
+    "confidence_95": {
+      "lower": 0.05668215145437519,
+      "upper": 0.5098375284633583
+    }
+  },
+  "false_completion_rate": {
+    "numerator": 4,
+    "denominator": 10,
+    "percentage": 40.0,
+    "confidence_95": null
+  },
+  "average_tool_calls_per_task": 6.9,
+  "average_tool_calls_per_successful_task": 9.0,
+  "tool_failure_rate": {
+    "numerator": 4,
+    "denominator": 69,
+    "percentage": 5.797101449275362,
+    "confidence_95": null
+  },
+  "average_replans_per_task": 0.2,
+  "replan_trigger_rate": {
+    "numerator": 1,
+    "denominator": 10,
+    "percentage": 10.0,
+    "confidence_95": null
+  },
+  "replan_recovery_rate": {
+    "numerator": 0,
+    "denominator": 1,
+    "percentage": 0.0,
+    "confidence_95": null
+  },
+  "step_rejection_rate": {
+    "numerator": 2,
+    "denominator": 10,
+    "percentage": 20.0,
+    "confidence_95": null
+  },
+  "approval_request_rate": {
+    "numerator": 5,
+    "denominator": 10,
+    "percentage": 50.0,
+    "confidence_95": null
+  },
+  "mean_wall_latency_ms": 31158.824190014275,
+  "median_wall_latency_ms": 27584.82605003519,
+  "p95_wall_latency_ms": 86112.4642000068,
+  "category_results": [
+    {
+      "category": "browser_dom",
+      "success": {
+        "numerator": 0,
+        "denominator": 1,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.7934506856227626
+        }
+      }
+    },
+    {
+      "category": "constraint_aggregation",
+      "success": {
+        "numerator": 0,
+        "denominator": 1,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.7934506856227626
+        }
+      }
+    },
+    {
+      "category": "form_interaction",
+      "success": {
+        "numerator": 0,
+        "denominator": 1,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.7934506856227626
+        }
+      }
+    },
+    {
+      "category": "hitl",
+      "success": {
+        "numerator": 1,
+        "denominator": 2,
+        "percentage": 50.0,
+        "confidence_95": {
+          "lower": 0.09453120573423074,
+          "upper": 0.9054687942657693
+        }
+      }
+    },
+    {
+      "category": "mcp",
+      "success": {
+        "numerator": 1,
+        "denominator": 1,
+        "percentage": 100.0,
+        "confidence_95": {
+          "lower": 0.20654931437723745,
+          "upper": 1.0
+        }
+      }
+    },
+    {
+      "category": "replanning",
+      "success": {
+        "numerator": 0,
+        "denominator": 4,
+        "percentage": 0.0,
+        "confidence_95": {
+          "lower": 0.0,
+          "upper": 0.4898908364545973
+        }
+      }
+    }
+  ]
+}

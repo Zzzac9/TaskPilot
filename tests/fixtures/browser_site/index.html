@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>TaskPilot Browser Fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>TaskPilot Browser Fixture</h1>
+
+      <label for="query">Search Query</label>
+      <input id="query" name="query" placeholder="Enter query">
+
+      <label for="category">Category</label>
+      <select id="category" name="category">
+        <option value="gyms">Gyms</option>
+        <option value="cafes">Cafes</option>
+      </select>
+
+      <label>
+        <input id="inactive" type="checkbox">
+        Include inactive
+      </label>
+      <button id="apply" type="button">Apply filters</button>
+
+      <section id="results" aria-live="polite">No results yet.</section>
+      <p id="css-fallback">CSS fallback target</p>
+
+      <form id="profile-form">
+        <label for="profile-name">Profile name</label>
+        <input id="profile-name" name="profile-name">
+        <button type="submit">Submit profile</button>
+      </form>
+      <p id="submit-status">Profile not submitted.</p>
+
+      <button id="delete-item" type="button">Delete item</button>
+      <p id="delete-status">Item exists.</p>
+
+      <section id="delayed-controls" aria-label="Delayed controls"></section>
+      <p id="delayed-status">Delayed action waiting.</p>
+
+      <a href="/details.html">Open details</a>
+      <a href="/details.html" target="_blank">Open details popup</a>
+      <a href="/download.txt" download="report.txt">Download report</a>
+
+      <iframe title="Demo frame" src="/frame.html"></iframe>
+
+      <button type="button">Duplicate action</button>
+      <button type="button">Duplicate action</button>
+    </main>
+    <script>
+      document.querySelector("#apply").addEventListener("click", () => {
+        const query = document.querySelector("#query").value;
+        const category = document.querySelector("#category").value;
+        const inactive = document.querySelector("#inactive").checked;
+        document.querySelector("#results").textContent =
+          `Results for ${query}; category=${category}; inactive=${inactive}: Harbor Gym, Peak Fitness`;
+      });
+      document.querySelector("#query").addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          const query = event.target.value;
+          document.querySelector("#results").textContent =
+            `Keyboard results for ${query}: Harbor Gym, Peak Fitness`;
+        }
+      });
+      document.querySelector("#profile-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        document.querySelector("#submit-status").textContent = "Profile submitted.";
+      });
+      document.querySelector("#delete-item").addEventListener("click", () => {
+        document.querySelector("#delete-status").textContent = "Item deleted.";
+      });
+      window.setTimeout(() => {
+        const controls = document.querySelector("#delayed-controls");
+        controls.innerHTML = `
+          <label for="delayed-input">Delayed Input</label>
+          <input id="delayed-input">
+          <button id="delayed-apply" type="button">Delayed Apply</button>
+        `;
+        document.querySelector("#delayed-apply").addEventListener("click", () => {
+          const value = document.querySelector("#delayed-input").value;
+          document.querySelector("#delayed-status").textContent = `Delayed value: ${value}`;
+        });
+      }, 250);
+    </script>
+  </body>
+</html>

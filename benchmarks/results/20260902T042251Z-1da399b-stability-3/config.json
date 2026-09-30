@@ -1,0 +1,8 @@
+{
+  "run_id": "20260902T042251Z-1da399b-stability-3",
+  "label": "stability-3",
+  "max_replans": 2,
+  "temperature": 0,
+  "seed": "unavailable",
+  "scripted_human_only": true
+}

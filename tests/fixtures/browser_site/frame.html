@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Frame Fixture</title>
+  </head>
+  <body>
+    <label for="frame-input">Frame Input</label>
+    <input id="frame-input">
+    <button id="frame-update" type="button">Update frame</button>
+    <p id="frame-result">Frame waiting.</p>
+    <script>
+      document.querySelector("#frame-update").addEventListener("click", () => {
+        const value = document.querySelector("#frame-input").value;
+        document.querySelector("#frame-result").textContent = `Frame value: ${value}`;
+      });
+    </script>
+  </body>
+</html>
