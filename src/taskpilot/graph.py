@@ -18,8 +18,17 @@ from taskpilot.analyzer import TaskAnalyzer, TaskAnalyzerLike
 from taskpilot.browser import BrowserLocatorError, is_vision_fallback_eligible
 from taskpilot.config import redact_sensitive_values
 from taskpilot.context import ContextBuilder
-from taskpilot.executor import ExecutorRunResult, TaskExecutor, TaskExecutorLike
-from taskpilot.finalizer import FinalAnswerGeneratorLike, VerifiedResultsRenderer
+from taskpilot.executor import (
+    MAX_DUPLICATE_OBSERVATION_CORRECTIONS,
+    ExecutorRunResult,
+    TaskExecutor,
+    TaskExecutorLike,
+)
+from taskpilot.finalizer import (
+    FinalAnswerGeneratorLike,
+    VerifiedResultsRenderer,
+    render_failure_answer,
+)
 from taskpilot.models import (
     ExecutorActionType,
     PlanStep,
@@ -33,6 +42,7 @@ from taskpilot.models import (
     ToolCallRecord,
     ToolCallStatus,
 )
+from taskpilot.observations import repeated_observation_streak
 from taskpilot.persistence.journal import ActionJournalLike, InMemoryActionJournal
 from taskpilot.persistence.models import (
     ActionJournalRecord,
@@ -715,12 +725,30 @@ async def begin_step_traced(
 ) -> TaskStateUpdate:
     update = begin_step(state)
     if update.get("status") is not TaskStatus.FAILED:
+        current_step_id = state.get("current_step_id")
+        active_steps = [
+            step
+            for step in state["plan"]
+            if step.revision == state.get("plan_revision", 0)
+        ]
+        step_position = next(
+            (
+                index
+                for index, step in enumerate(active_steps, start=1)
+                if step.id == current_step_id
+            ),
+            None,
+        )
         await _trace(
             trace_recorder,
             state,
             TraceEventType.STEP_STARTED,
-            step_id=state.get("current_step_id"),
+            step_id=current_step_id,
             status=PlanStepStatus.RUNNING.value,
+            payload={
+                "step_position": step_position,
+                "step_total": len(active_steps),
+            },
         )
     return update
 
@@ -956,6 +984,40 @@ def _failed_update(error: str) -> TaskStateUpdate:
     return {"status": TaskStatus.FAILED, "error": error}
 
 
+def finalize_terminal(state: TaskState) -> TaskStateUpdate:
+    """Persist a deterministic user-facing summary for terminal failures."""
+
+    if state["status"] is not TaskStatus.FAILED or state.get("final_answer"):
+        return {}
+    return {
+        "final_answer": render_failure_answer(
+            task_spec=state.get("task_spec"),
+            plan=state.get("plan", []),
+            current_step_id=state.get("current_step_id"),
+            step_results=state.get("step_results", []),
+            step_outcome=state.get("step_outcome"),
+            error=state.get("error"),
+            verification=state.get("verification"),
+        )
+    }
+
+
+async def finalize_terminal_traced(
+    state: TaskState, *, trace_recorder: TraceRecorderLike
+) -> TaskStateUpdate:
+    update = finalize_terminal(state)
+    if update.get("final_answer"):
+        await _trace(
+            trace_recorder,
+            state,
+            TraceEventType.FAILURE_SUMMARY_GENERATED,
+            step_id=state.get("current_step_id"),
+            status="success",
+            payload={"deterministic": True},
+        )
+    return update
+
+
 def _route_after_plan(state: TaskState) -> Literal["execute_step", "end"]:
     return "end" if state["status"] == TaskStatus.FAILED else "execute_step"
 
@@ -1004,6 +1066,12 @@ def _route_after_advance(
     if state["current_step_id"] is None:
         return "verify_task"
     return "execute_step"
+
+
+def _route_after_terminal_verification(
+    state: TaskState,
+) -> Literal["failure", "end"]:
+    return "failure" if state["status"] is TaskStatus.FAILED else "end"
 
 
 def _build_legacy_graph(
@@ -1058,6 +1126,7 @@ def _build_legacy_graph(
         "verify_task",
         partial(verify_task, verifier=active_verifier),
     )
+    builder.add_node("finalize_terminal", finalize_terminal)
 
     builder.add_edge(START, "initialize_task")
     builder.add_edge("initialize_task", "analyze_task")
@@ -1065,7 +1134,7 @@ def _build_legacy_graph(
     builder.add_conditional_edges(
         "plan_task",
         _route_after_plan,
-        {"execute_step": "execute_step", "end": END},
+        {"execute_step": "execute_step", "end": "finalize_terminal"},
     )
     builder.add_conditional_edges(
         "execute_step",
@@ -1073,7 +1142,7 @@ def _build_legacy_graph(
         {
             "prepare_approval": "prepare_approval",
             "verify_step": "verify_step",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_edge("prepare_approval", "human_approval")
@@ -1083,7 +1152,7 @@ def _build_legacy_graph(
         {
             "execute_approved_action": "execute_approved_action",
             "handle_rejection": "handle_rejection",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_edge("execute_approved_action", "execute_step")
@@ -1094,7 +1163,7 @@ def _build_legacy_graph(
         {
             "advance_step": "advance_step",
             "execute_step": "execute_step",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_conditional_edges(
@@ -1103,10 +1172,15 @@ def _build_legacy_graph(
         {
             "execute_step": "execute_step",
             "verify_task": "verify_task",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
-    builder.add_edge("verify_task", END)
+    builder.add_conditional_edges(
+        "verify_task",
+        _route_after_terminal_verification,
+        {"failure": "finalize_terminal", "end": END},
+    )
+    builder.add_edge("finalize_terminal", END)
     return builder.compile(checkpointer=checkpointer)
 
 
@@ -1124,6 +1198,8 @@ def begin_step(state: TaskState) -> TaskStateUpdate:
     return {
         "plan": _replace_step(state["plan"], index, running),
         "current_action_index": 0,
+        "executor_feedback": None,
+        "duplicate_observation_corrections": 0,
         "pending_executor_action": None,
         "pending_action": None,
         "recovery_issue": None,
@@ -1158,6 +1234,8 @@ async def decide_action(
                 error=f"Executor action limit reached: {executor.max_actions_per_step}",
             ),
             "pending_executor_action": None,
+            "executor_feedback": None,
+            "duplicate_observation_corrections": 0,
             "status": TaskStatus.RUNNING,
             "error": None,
         }
@@ -1172,7 +1250,8 @@ async def decide_action(
         step_results=state["step_results"],
         verification_feedback=state.get("step_verification"),
         policy_decisions=state.get("policy_decisions", []),
-        approval_records=state.get("approval_records", []),
+            approval_records=state.get("approval_records", []),
+            executor_feedback=state.get("executor_feedback"),
     )
     latency = (perf_counter() - started) * 1000
     if result.context_snapshot is not None:
@@ -1195,7 +1274,13 @@ async def decide_action(
         TraceEventType.LLM_ACTION_DECIDED,
         step_id=step_id,
         call_id=result.action.call_id if result.action is not None else None,
-        status="failed" if result.fatal_error else "success",
+        status=(
+            "failed"
+            if result.fatal_error
+            else "corrected"
+            if result.correction_feedback
+            else "success"
+        ),
         latency_ms=latency,
         payload={
             "model_invoked": result.context_snapshot is not None,
@@ -1205,7 +1290,10 @@ async def decide_action(
                     "tool_name": result.action.tool_name,
                 }
                 if result.action is not None
-                else {"error": result.error}
+                else {
+                    "error": result.error,
+                    "correction_feedback": result.correction_feedback,
+                }
             ),
             **(
                 {"usage_metadata": result.usage_metadata}
@@ -1223,6 +1311,56 @@ async def decide_action(
             status=TaskStatus.FAILED.value,
             payload={"error": result.error},
         )
+    if result.correction_feedback is not None:
+        corrections = state.get("duplicate_observation_corrections", 0) + 1
+        await _trace(
+            trace_recorder,
+            state,
+            TraceEventType.EXECUTOR_CORRECTED,
+            step_id=step_id,
+            status="retry" if corrections <= MAX_DUPLICATE_OBSERVATION_CORRECTIONS else "exhausted",
+            payload={
+                "reason": result.correction_feedback,
+                "correction": corrections,
+                "max_corrections": MAX_DUPLICATE_OBSERVATION_CORRECTIONS,
+            },
+        )
+        if corrections > MAX_DUPLICATE_OBSERVATION_CORRECTIONS:
+            error = (
+                "Executor duplicate observation correction exhausted after "
+                f"{MAX_DUPLICATE_OBSERVATION_CORRECTIONS} retries"
+            )
+            await _trace(
+                trace_recorder,
+                state,
+                TraceEventType.TASK_FAILED,
+                step_id=step_id,
+                status=TaskStatus.FAILED.value,
+                payload={"error": error},
+            )
+            return {
+                "current_action_index": action_index,
+                "duplicate_observation_corrections": corrections,
+                "executor_feedback": result.correction_feedback,
+                "step_outcome": StepExecutionOutcome(
+                    step_id=step_id,
+                    claimed_complete=False,
+                    action_count=action_index,
+                    error=error,
+                ),
+                "pending_executor_action": None,
+                "status": TaskStatus.FAILED,
+                "error": error,
+            }
+        return {
+            "current_action_index": action_index,
+            "duplicate_observation_corrections": corrections,
+            "executor_feedback": result.correction_feedback,
+            "pending_executor_action": None,
+            "pending_action": None,
+            "status": TaskStatus.RUNNING,
+            "error": None,
+        }
     if result.fatal_error or result.action is None:
         error = result.error or "Executor decision 未返回 action"
         return {
@@ -1243,6 +1381,8 @@ async def decide_action(
         "current_action_index": action_index,
         "pending_executor_action": action,
         "pending_action": None,
+        "executor_feedback": None,
+        "duplicate_observation_corrections": 0,
         "status": TaskStatus.RUNNING,
         "error": None,
     }
@@ -1479,7 +1619,7 @@ def _materialize_tool_call(
         updated_calls = state["tool_calls"]
     else:
         updated_calls = state["tool_calls"] + [tool_call]
-    return {
+    update: TaskStateUpdate = {
         "tool_calls": updated_calls,
         "pending_executor_action": None,
         "pending_action": None,
@@ -1487,6 +1627,20 @@ def _materialize_tool_call(
         "status": TaskStatus.RUNNING,
         "error": None,
     }
+    if tool_call.tool_name == "browser_observe" and tool_call.status is ToolCallStatus.SUCCESS:
+        streak, page, fingerprint = repeated_observation_streak(
+            updated_calls,
+            step_id=tool_call.step_id or action.step_id,
+            proposed_arguments=tool_call.arguments,
+        )
+        if streak >= 2:
+            update["executor_feedback"] = (
+                "最新 browser_observe 与前一次内容相同：页面 "
+                f"{page or 'current page'}，fingerprint="
+                f"{fingerprint[:12] if fingerprint else 'unknown'}。"
+                "优先复用已有 observation；满足成功条件时直接 finish_step。"
+            )
+    return update
 
 
 async def execute_tool_action(
@@ -1844,6 +1998,8 @@ def reset_step_attempt(state: TaskState) -> TaskStateUpdate:
 
     return {
         "current_action_index": 0,
+        "executor_feedback": None,
+        "duplicate_observation_corrections": 0,
         "pending_executor_action": None,
         "pending_action": None,
         "recovery_issue": None,
@@ -1879,6 +2035,10 @@ async def verify_step_traced(
         latency_ms=(perf_counter() - started) * 1000,
         payload={
             "feedback": result.feedback if result is not None else update.get("error"),
+            "model_invoked": bool(
+                state.get("step_outcome") is not None
+                and state["step_outcome"].claimed_complete
+            ),
             "replan_triggered": update.get("pending_replan") is not None,
             **(
                 {"replan_trigger": update["pending_replan"].trigger.value}
@@ -1930,6 +2090,8 @@ async def verify_task_traced(
         task_spec = state.get("task_spec")
         if task_spec is None:
             return _failed_update("Final Answer 生成失败: task_spec 缺失")
+        finalizer_started = perf_counter()
+        finalizer_uses_model = bool(getattr(finalizer, "uses_model", True))
         try:
             final_answer = finalizer.generate(
                 task_spec=task_spec,
@@ -1950,11 +2112,30 @@ async def verify_task_traced(
             await _trace(
                 trace_recorder,
                 state,
+                TraceEventType.FINAL_ANSWER_GENERATED,
+                status="failed",
+                latency_ms=(perf_counter() - finalizer_started) * 1000,
+                payload={
+                    "error": update["error"],
+                    "model_invoked": finalizer_uses_model,
+                },
+            )
+            await _trace(
+                trace_recorder,
+                state,
                 TraceEventType.TASK_FAILED,
                 status=TaskStatus.FAILED.value,
                 payload={"error": update["error"]},
             )
             return update
+        await _trace(
+            trace_recorder,
+            state,
+            TraceEventType.FINAL_ANSWER_GENERATED,
+            status="success",
+            latency_ms=(perf_counter() - finalizer_started) * 1000,
+            payload={"model_invoked": finalizer_uses_model},
+        )
         await _trace(
             trace_recorder,
             state,
@@ -1977,6 +2158,8 @@ def advance_step_action_level(state: TaskState) -> TaskStateUpdate:
 
     update = advance_step(state)
     update["current_action_index"] = 0
+    update["executor_feedback"] = None
+    update["duplicate_observation_corrections"] = 0
     update["pending_executor_action"] = None
     update["pending_action"] = None
     update["recovery_issue"] = None
@@ -1985,11 +2168,15 @@ def advance_step_action_level(state: TaskState) -> TaskStateUpdate:
 
 def _route_after_decision(
     state: TaskState,
-) -> Literal["assess_policy", "build_step_outcome", "verify_step", "end"]:
+) -> Literal["assess_policy", "build_step_outcome", "decide_action", "verify_step", "end"]:
     if state["status"] is TaskStatus.FAILED:
         return "end"
     action = state.get("pending_executor_action")
     if action is None:
+        if state.get("step_outcome") is not None:
+            return "verify_step"
+        if state.get("executor_feedback"):
+            return "decide_action"
         return "verify_step"
     return (
         "build_step_outcome"
@@ -2056,8 +2243,10 @@ def _route_after_action_advance(
 
 def _route_after_task_verification(
     state: TaskState,
-) -> Literal["replan_task", "end"]:
-    return "replan_task" if state.get("pending_replan") is not None else "end"
+) -> Literal["replan_task", "failure", "end"]:
+    if state.get("pending_replan") is not None:
+        return "replan_task"
+    return "failure" if state["status"] is TaskStatus.FAILED else "end"
 
 
 def _route_after_replan(state: TaskState) -> Literal["begin_step", "end"]:
@@ -2169,12 +2358,16 @@ def _build_action_level_graph(
             trace_recorder=trace_recorder,
         ),
     )
+    builder.add_node(
+        "finalize_terminal",
+        partial(finalize_terminal_traced, trace_recorder=trace_recorder),
+    )
 
     builder.add_edge(START, "initialize_task")
     builder.add_edge("initialize_task", "analyze_task")
     builder.add_edge("analyze_task", "plan_task")
     builder.add_conditional_edges(
-        "plan_task", _route_after_plan, {"execute_step": "begin_step", "end": END}
+        "plan_task", _route_after_plan, {"execute_step": "begin_step", "end": "finalize_terminal"}
     )
     builder.add_edge("begin_step", "decide_action")
     builder.add_conditional_edges(
@@ -2184,7 +2377,8 @@ def _build_action_level_graph(
             "assess_policy": "assess_policy",
             "build_step_outcome": "build_step_outcome",
             "verify_step": "verify_step",
-            "end": END,
+            "decide_action": "decide_action",
+            "end": "finalize_terminal",
         },
     )
     builder.add_conditional_edges(
@@ -2194,7 +2388,7 @@ def _build_action_level_graph(
             "policy_feedback": "policy_feedback",
             "prepare_approval": "prepare_approval",
             "execute_tool_action": "execute_tool_action",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_edge("policy_feedback", "decide_action")
@@ -2205,24 +2399,24 @@ def _build_action_level_graph(
         {
             "execute_approved_action": "execute_tool_action",
             "handle_rejection": "rejection_feedback",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_edge("rejection_feedback", "decide_action")
     builder.add_conditional_edges(
         "execute_tool_action",
         _route_after_tool_execution,
-        {"decide_action": "decide_action", "recovery_review": "recovery_review", "end": END},
+        {"decide_action": "decide_action", "recovery_review": "recovery_review", "end": "finalize_terminal"},
     )
     builder.add_conditional_edges(
         "recovery_review",
         _route_after_recovery,
-        {"authorize_recovery_retry": "authorize_recovery_retry", "end": END},
+        {"authorize_recovery_retry": "authorize_recovery_retry", "end": "finalize_terminal"},
     )
     builder.add_conditional_edges(
         "authorize_recovery_retry",
         _route_after_recovery_authorization,
-        {"execute_tool_action": "execute_tool_action", "end": END},
+        {"execute_tool_action": "execute_tool_action", "end": "finalize_terminal"},
     )
     builder.add_edge("build_step_outcome", "verify_step")
     builder.add_conditional_edges(
@@ -2232,25 +2426,26 @@ def _build_action_level_graph(
             "advance_step": "advance_step",
             "reset_step_attempt": "reset_step_attempt",
             "replan_task": "replan_task",
-            "end": END,
+            "end": "finalize_terminal",
         },
     )
     builder.add_edge("reset_step_attempt", "decide_action")
     builder.add_conditional_edges(
         "advance_step",
         _route_after_action_advance,
-        {"decide_action": "decide_action", "verify_task": "verify_task", "end": END},
+        {"decide_action": "decide_action", "verify_task": "verify_task", "end": "finalize_terminal"},
     )
     builder.add_conditional_edges(
         "verify_task",
         _route_after_task_verification,
-        {"replan_task": "replan_task", "end": END},
+        {"replan_task": "replan_task", "failure": "finalize_terminal", "end": END},
     )
     builder.add_conditional_edges(
         "replan_task",
         _route_after_replan,
-        {"begin_step": "begin_step", "end": END},
+        {"begin_step": "begin_step", "end": "finalize_terminal"},
     )
+    builder.add_edge("finalize_terminal", END)
     return builder.compile(checkpointer=checkpointer)
 
 

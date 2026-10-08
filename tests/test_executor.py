@@ -69,6 +69,33 @@ class FailingTool:
         raise RuntimeError("controlled lookup failure")
 
 
+@dataclass
+class StableBrowserObserveTool:
+    name: str = "browser_observe"
+    description: str = "Return the same durable page snapshot."
+    input_schema: dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"page_id": {"type": "string"}},
+            "additionalProperties": False,
+        }
+    )
+    calls: list[dict[str, Any]] = field(default_factory=list)
+
+    async def invoke(self, arguments: dict[str, Any]) -> Any:
+        self.calls.append(dict(arguments))
+        return {
+            "page_id": arguments.get("page_id", "page-1"),
+            "url": "https://example.test/results",
+            "title": "Results",
+            "aria_snapshot": "heading Results\nlink Candidate A",
+            "snapshot_mode": "ai",
+            "depth": 5,
+            "truncated": False,
+            "original_length": 32,
+        }
+
+
 class FakeFunctionCallingModel:
     """按顺序返回 AIMessage，并保留每轮完整消息快照。"""
 
@@ -286,6 +313,79 @@ async def test_action_limit_returns_incomplete_outcome() -> None:
     assert result.outcome.error == "Executor action limit reached: 1"
     assert len(result.tool_calls) == 1
     assert result.fatal_error is False
+
+
+@pytest.mark.asyncio
+async def test_graph_skips_third_identical_browser_observation_and_reuses_result() -> None:
+    tool = StableBrowserObserveTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    model = FakeFunctionCallingModel(
+        [
+            tool_call("browser_observe", {}, "observe-1"),
+            tool_call("browser_observe", {}, "observe-2"),
+            tool_call("browser_observe", {}, "observe-3-skipped"),
+            finish_call("finish-after-reuse"),
+        ]
+    )
+    executor = TaskExecutor(
+        registry=registry,
+        model=cast(BaseChatModel, model),
+        max_actions_per_step=6,
+    )
+
+    result = await build_graph(
+        analyzer=FakeAnalyzer(),
+        planner=FakePlanner(),
+        executor=executor,
+        verifier=FakeVerifier(),
+    ).ainvoke(make_initial_state())
+
+    assert result["status"] is TaskStatus.COMPLETED
+    assert len(tool.calls) == 2
+    assert len(result["tool_calls"]) == 2
+    assert len(model.invocations) == 4
+    duplicate_context = json.loads(str(model.invocations[2][-1].content))
+    assert "最新 browser_observe 与前一次内容相同" in duplicate_context[
+        "executor_feedback"
+    ]
+    retry_context = json.loads(str(model.invocations[3][-1].content))
+    assert "重复观察已被控制层跳过" in retry_context["executor_feedback"]
+    assert retry_context["observation_reuse"][0]["duplicate_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_duplicate_observation_correction_is_bounded_without_more_tool_calls() -> None:
+    tool = StableBrowserObserveTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    model = FakeFunctionCallingModel(
+        [
+            tool_call("browser_observe", {}, "bounded-observe-1"),
+            tool_call("browser_observe", {}, "bounded-observe-2"),
+            tool_call("browser_observe", {}, "bounded-observe-3"),
+            tool_call("browser_observe", {}, "bounded-observe-4"),
+            tool_call("browser_observe", {}, "bounded-observe-5"),
+        ]
+    )
+    executor = TaskExecutor(
+        registry=registry,
+        model=cast(BaseChatModel, model),
+        max_actions_per_step=8,
+    )
+
+    result = await build_graph(
+        analyzer=FakeAnalyzer(),
+        planner=FakePlanner(),
+        executor=executor,
+        verifier=FakeVerifier(),
+    ).ainvoke(make_initial_state())
+
+    assert result["status"] is TaskStatus.FAILED
+    assert len(tool.calls) == 2
+    assert len(model.invocations) == 5
+    assert "duplicate observation correction exhausted" in result["error"]
+    assert "任务未完成" in result["final_answer"]
 
 
 @pytest.mark.asyncio
@@ -669,7 +769,8 @@ async def test_graph_verifies_and_completes_single_step() -> None:
 
     edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
     assert ("plan_task", "execute_step") in edges
-    assert ("execute_step", "__end__") in edges
+    assert ("execute_step", "finalize_terminal") in edges
+    assert ("finalize_terminal", "__end__") in edges
     assert executor.executed_step_ids == [1]
     assert result["status"] is TaskStatus.COMPLETED
     assert result["current_step_id"] is None

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import taskpilot.cli as cli
+from taskpilot.trace import TraceEventType, make_trace_event
 
 
 def shell_args(**overrides: object) -> argparse.Namespace:
@@ -50,6 +51,84 @@ def test_startup_banner_displays_model_without_credentials(
     assert "deepseek-v4-flash" in banner
     assert "Browser : ON · VISIBLE" in banner
     assert "super-secret-key" not in banner
+
+
+def test_progress_distinguishes_executor_claim_from_verification() -> None:
+    executor_message = cli.render_progress_event(
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.LLM_ACTION_DECIDED,
+            step_id=2,
+            latency_ms=12.0,
+            payload={"action_type": "finish_step"},
+        )
+    )
+    verifier_message = cli.render_progress_event(
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.STEP_VERIFIED,
+            step_id=2,
+            latency_ms=4.0,
+        )
+    )
+
+    assert executor_message is not None
+    assert "awaiting step verification" in executor_message
+    assert "passed" not in executor_message
+    assert verifier_message is not None
+    assert "verification passed" in verifier_message
+
+
+def test_progress_renders_step_position() -> None:
+    message = cli.render_progress_event(
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.STEP_STARTED,
+            step_id=7,
+            payload={"step_position": 2, "step_total": 4},
+        )
+    )
+
+    assert message is not None
+    assert "step=7" in message
+    assert "progress=2/4" in message
+
+
+def test_progress_error_is_redacted_and_compact(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "progress-secret")
+    message = cli.render_progress_event(
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.TASK_FAILED,
+            payload={"error": "progress-secret " + "x" * 1_000},
+        )
+    )
+
+    assert message is not None
+    assert "progress-secret" not in message
+    assert "[REDACTED]" in message
+    assert len(message) < 300
+
+
+def test_progress_reports_duplicate_observation_correction() -> None:
+    message = cli.render_progress_event(
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.EXECUTOR_CORRECTED,
+            step_id=1,
+            payload={"reason": "same page and content"},
+        )
+    )
+
+    assert message is not None
+    assert "duplicate observation skipped" in message
+    assert "same page and content" in message
+
+
+def test_interactive_task_argv_preserves_verbose_mode() -> None:
+    argv = cli.interactive_task_argv(shell_args(verbose=True), "task")
+
+    assert "--verbose" in argv
 
 
 @pytest.mark.asyncio

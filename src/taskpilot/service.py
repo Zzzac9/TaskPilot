@@ -3,6 +3,7 @@
 from collections.abc import Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, AsyncIterator, Protocol
 from uuid import uuid4
 
@@ -12,6 +13,7 @@ from langgraph.types import Command
 
 from taskpilot.analyzer import TaskAnalyzerLike
 from taskpilot.browser import BrowserConfig, BrowserToolProvider
+from taskpilot.config import redact_sensitive_values
 from taskpilot.context import ContextBuilder
 from taskpilot.executor import TaskExecutor
 from taskpilot.finalizer import (
@@ -34,7 +36,15 @@ from taskpilot.policy import DefaultRiskPolicy
 from taskpilot.replanner import TaskReplannerLike
 from taskpilot.state import TaskState
 from taskpilot.tools import ToolRegistry
-from taskpilot.trace import SQLiteTraceRecorder, TraceSummary, summarize_task_trace
+from taskpilot.trace import (
+    ProgressHandler,
+    ProgressTraceRecorder,
+    SQLiteTraceRecorder,
+    TraceEventType,
+    TraceSummary,
+    make_trace_event,
+    summarize_task_trace,
+)
 from taskpilot.verifier import TaskVerifierLike
 from taskpilot.vision import VisionConfig, VisionTargeterLike
 
@@ -98,7 +108,7 @@ class TaskRunSnapshot:
 @dataclass
 class _OpenRuntime:
     graph: CompiledStateGraph
-    trace_recorder: SQLiteTraceRecorder
+    trace_recorder: ProgressTraceRecorder
     stack: AsyncExitStack
     browser_provider: BrowserToolProvider | None = None
     closed: bool = False
@@ -149,6 +159,8 @@ def create_initial_state(
         "policy_decisions": [],
         "approval_records": [],
         "current_action_index": 0,
+        "executor_feedback": None,
+        "duplicate_observation_corrections": 0,
         "pending_executor_action": None,
         "recovery_issue": None,
         "pending_replan": None,
@@ -239,6 +251,7 @@ class TaskPilotService:
         task: str,
         *,
         enable_browser: bool = False,
+        progress_handler: ProgressHandler | None = None,
     ) -> TaskRunSnapshot:
         """同步运行新任务，直到完成、失败或 LangGraph interrupt。"""
 
@@ -247,16 +260,22 @@ class TaskPilotService:
         state = create_initial_state(task, browser_enabled=enable_browser)
         task_id = state["task_id"]
         if not enable_browser:
-            async with self._open_runtime(enable_browser=False) as runtime:
+            async with self._open_runtime(
+                enable_browser=False,
+                progress_handler=progress_handler,
+            ) as runtime:
                 config = self._graph_config(task_id)
-                await runtime.graph.ainvoke(state, config=config)
+                await self._run_graph(runtime, state, config, task_id)
                 return await self._read_snapshot(runtime.graph, config, task_id)
 
-        runtime = await self._create_runtime(enable_browser=True)
+        runtime = await self._create_runtime(
+            enable_browser=True,
+            progress_handler=progress_handler,
+        )
         self._live_runtimes[task_id] = runtime
         try:
             config = self._graph_config(task_id)
-            await runtime.graph.ainvoke(state, config=config)
+            await self._run_graph(runtime, state, config, task_id)
             snapshot = await self._read_snapshot(runtime.graph, config, task_id)
         except BaseException:
             await self._close_live_runtime(task_id, runtime)
@@ -270,6 +289,7 @@ class TaskPilotService:
         *,
         interrupt_type: str,
         response: dict[str, Any],
+        progress_handler: ProgressHandler | None = None,
     ) -> TaskRunSnapshot:
         """校验当前 durable interrupt 后，仅提交人工 decision/choice。"""
 
@@ -302,10 +322,15 @@ class TaskPilotService:
                 "live browser environment for pending action is no longer available"
             )
         if live_runtime is not None:
+            if progress_handler is not None:
+                live_runtime.trace_recorder.handler = progress_handler
             try:
                 config = self._graph_config(task_id)
-                await live_runtime.graph.ainvoke(
-                    Command(resume=clean_response), config=config
+                await self._run_graph(
+                    live_runtime,
+                    Command(resume=clean_response),
+                    config,
+                    task_id,
                 )
                 snapshot = await self._read_snapshot(
                     live_runtime.graph, config, task_id
@@ -315,12 +340,25 @@ class TaskPilotService:
                 raise
             await self._finalize_live_runtime(task_id, live_runtime, snapshot)
             return snapshot
-        async with self._open_runtime(enable_browser=enable_browser) as runtime:
+        async with self._open_runtime(
+            enable_browser=enable_browser,
+            progress_handler=progress_handler,
+        ) as runtime:
             config = self._graph_config(task_id)
-            await runtime.graph.ainvoke(Command(resume=clean_response), config=config)
+            await self._run_graph(
+                runtime,
+                Command(resume=clean_response),
+                config,
+                task_id,
+            )
             return await self._read_snapshot(runtime.graph, config, task_id)
 
-    async def continue_task(self, task_id: str) -> TaskRunSnapshot:
+    async def continue_task(
+        self,
+        task_id: str,
+        *,
+        progress_handler: ProgressHandler | None = None,
+    ) -> TaskRunSnapshot:
         """从非 interrupt 的 durable next node 续跑，供 CLI crash recovery 使用。"""
 
         current = await self.get_task(task_id)
@@ -338,9 +376,11 @@ class TaskPilotService:
         enable_browser = bool(current.state.get("browser_enabled", False))
         live_runtime = self._live_runtimes.get(task_id)
         if live_runtime is not None:
+            if progress_handler is not None:
+                live_runtime.trace_recorder.handler = progress_handler
             try:
                 config = self._graph_config(task_id)
-                await live_runtime.graph.ainvoke(None, config=config)
+                await self._run_graph(live_runtime, None, config, task_id)
                 snapshot = await self._read_snapshot(
                     live_runtime.graph, config, task_id
                 )
@@ -353,9 +393,12 @@ class TaskPilotService:
             raise TaskConflictError(
                 "live browser environment for pending action is no longer available"
             )
-        async with self._open_runtime(enable_browser=enable_browser) as runtime:
+        async with self._open_runtime(
+            enable_browser=enable_browser,
+            progress_handler=progress_handler,
+        ) as runtime:
             config = self._graph_config(task_id)
-            await runtime.graph.ainvoke(None, config=config)
+            await self._run_graph(runtime, None, config, task_id)
             return await self._read_snapshot(runtime.graph, config, task_id)
 
     async def get_task(self, task_id: str) -> TaskRunSnapshot:
@@ -376,17 +419,28 @@ class TaskPilotService:
 
     @asynccontextmanager
     async def _open_runtime(
-        self, *, enable_browser: bool
+        self,
+        *,
+        enable_browser: bool,
+        progress_handler: ProgressHandler | None = None,
     ) -> AsyncIterator[_OpenRuntime]:
         """每次调用用 AsyncExitStack 构造并完整关闭外部资源。"""
 
-        runtime = await self._create_runtime(enable_browser=enable_browser)
+        runtime = await self._create_runtime(
+            enable_browser=enable_browser,
+            progress_handler=progress_handler,
+        )
         try:
             yield runtime
         finally:
             await runtime.aclose()
 
-    async def _create_runtime(self, *, enable_browser: bool) -> _OpenRuntime:
+    async def _create_runtime(
+        self,
+        *,
+        enable_browser: bool,
+        progress_handler: ProgressHandler | None = None,
+    ) -> _OpenRuntime:
         """构造可临时使用或跨 Browser approval 保留的完整 runtime。"""
 
         registry = ToolRegistry()
@@ -415,9 +469,10 @@ class TaskPilotService:
             journal = await stack.enter_async_context(
                 SQLiteActionJournal(self.persistence_config.action_journal_db_path)
             )
-            trace = await stack.enter_async_context(
+            sqlite_trace = await stack.enter_async_context(
                 SQLiteTraceRecorder(self.persistence_config.trace_db_path)
             )
+            trace = ProgressTraceRecorder(sqlite_trace, progress_handler)
             if checkpoint_provider.checkpointer is None:  # pragma: no cover
                 raise RuntimeError("SQLite checkpointer 未初始化")
 
@@ -463,6 +518,92 @@ class TaskPilotService:
             )
         except BaseException:
             await stack.aclose()
+            raise
+
+    @staticmethod
+    async def _run_graph(
+        runtime: _OpenRuntime,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: str,
+    ) -> None:
+        """消费 LangGraph debug 流，只提取节点 identity/耗时，不保存 State。"""
+
+        active_nodes: dict[str, tuple[float, str, int | None]] = {}
+        try:
+            async for item in runtime.graph.astream(
+                graph_input,
+                config=config,
+                stream_mode="debug",
+            ):
+                if not isinstance(item, dict):
+                    continue
+                event_type = item.get("type")
+                payload = item.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                node_id = str(payload.get("id") or "")
+                node_name = str(payload.get("name") or "")
+                if not node_id or not node_name:
+                    continue
+                if event_type == "task":
+                    node_input = payload.get("input")
+                    step_id = (
+                        node_input.get("current_step_id")
+                        if isinstance(node_input, dict)
+                        and isinstance(node_input.get("current_step_id"), int)
+                        else None
+                    )
+                    active_nodes[node_id] = (perf_counter(), node_name, step_id)
+                    await runtime.trace_recorder.record(
+                        make_trace_event(
+                            task_id=task_id,
+                            event_type=TraceEventType.NODE_STARTED,
+                            step_id=step_id,
+                            status="running",
+                            payload={"node_name": node_name},
+                        )
+                    )
+                    continue
+                if event_type != "task_result":
+                    continue
+                started = active_nodes.pop(node_id, None)
+                if started is None:
+                    continue
+                started_at, started_name, step_id = started
+                error = payload.get("error")
+                interrupts = payload.get("interrupts") or []
+                status = "failed" if error else "interrupted" if interrupts else "success"
+                safe_error = None
+                if error:
+                    safe_error = redact_sensitive_values(str(error))[:500]
+                await runtime.trace_recorder.record(
+                    make_trace_event(
+                        task_id=task_id,
+                        event_type=TraceEventType.NODE_COMPLETED,
+                        step_id=step_id,
+                        status=status,
+                        latency_ms=(perf_counter() - started_at) * 1000,
+                        payload={
+                            "node_name": started_name,
+                            "interrupt_count": len(interrupts),
+                            **({"error": safe_error} if safe_error else {}),
+                        },
+                    )
+                )
+        except BaseException as exc:
+            detail = redact_sensitive_values(str(exc))[:500]
+            for started_at, node_name, step_id in active_nodes.values():
+                await runtime.trace_recorder.record(
+                    make_trace_event(
+                        task_id=task_id,
+                        event_type=TraceEventType.NODE_COMPLETED,
+                        step_id=step_id,
+                        status="failed",
+                        latency_ms=(perf_counter() - started_at) * 1000,
+                        payload={"node_name": node_name, "error": detail},
+                    )
+                )
             raise
 
     @asynccontextmanager

@@ -8,14 +8,48 @@ from langchain_core.exceptions import OutputParserException
 from pydantic import ValidationError
 from langchain_openai import ChatOpenAI
 
-from taskpilot.config import Settings
+from taskpilot.config import Settings, redact_sensitive_values
 
 
 STRUCTURED_OUTPUT_METHOD = "function_calling"
 STRUCTURED_OUTPUT_MAX_ATTEMPTS = 3
+STRUCTURED_OUTPUT_ERROR_MAX_CHARS = 2_000
 STRUCTURED_OUTPUT_RETRY_PROMPT = """上一轮结构化输出无法解析。请重新完整生成一次。
 严格使用要求的 schema，不要输出 schema 之外的文字。
+只修复 JSON/schema 格式，不要改变上一轮的事实、判断或结论。
 JSON 字符串内容中的 ASCII 双引号必须使用反斜杠正确转义；更推荐改用中文引号“……”。"""
+
+
+class StructuredOutputRetryExhausted(RuntimeError):
+    """结构化输出在有限次数内始终无法解析。"""
+
+    def __init__(
+        self,
+        *,
+        schema: type[Any],
+        attempts: int,
+        last_error: str,
+    ) -> None:
+        self.schema = schema
+        self.attempts = attempts
+        self.last_error = last_error
+        super().__init__(
+            f"{schema.__name__} structured output parsing failed after "
+            f"{attempts} attempts; last error: {last_error}"
+        )
+
+
+def _safe_structured_output_error(exc: Exception) -> str:
+    """生成可反馈给模型和调用方的脱敏、定长错误摘要。"""
+
+    detail = redact_sensitive_values(str(exc)).strip() or type(exc).__name__
+    if len(detail) <= STRUCTURED_OUTPUT_ERROR_MAX_CHARS:
+        return detail
+    omitted = len(detail) - STRUCTURED_OUTPUT_ERROR_MAX_CHARS
+    return (
+        detail[:STRUCTURED_OUTPUT_ERROR_MAX_CHARS]
+        + f"... [truncated {omitted} chars]"
+    )
 
 
 def bind_structured_output(model: BaseChatModel, schema: type[Any]) -> Any:
@@ -48,14 +82,21 @@ def invoke_structured_with_retry(
                 if isinstance(raw_result, schema)
                 else schema.model_validate(raw_result)
             )
-        except (OutputParserException, ValidationError):
+        except (OutputParserException, ValidationError) as exc:
+            error_detail = _safe_structured_output_error(exc)
             if attempt >= max_attempts:
-                raise
+                raise StructuredOutputRetryExhausted(
+                    schema=schema,
+                    attempts=max_attempts,
+                    last_error=error_detail,
+                ) from exc
             active_messages = [
                 *messages,
                 (
                     "human",
-                    f"{STRUCTURED_OUTPUT_RETRY_PROMPT}\n当前是第 {attempt + 1} 次尝试。",
+                    f"{STRUCTURED_OUTPUT_RETRY_PROMPT}\n"
+                    f"解析错误：{error_detail}\n"
+                    f"当前是第 {attempt + 1} 次尝试（最多 {max_attempts} 次）。",
                 ),
             ]
     raise AssertionError("unreachable")

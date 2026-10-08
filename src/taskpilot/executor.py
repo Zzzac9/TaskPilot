@@ -29,6 +29,7 @@ from taskpilot.models import (
     ToolCallRecord,
     ToolCallStatus,
 )
+from taskpilot.observations import repeated_observation_streak
 from taskpilot.policy import (
     ApprovalChoice,
     ApprovalRecord,
@@ -45,6 +46,7 @@ from taskpilot.tools.registry import (
 
 
 FINISH_STEP_NAME = "finish_step"
+MAX_DUPLICATE_OBSERVATION_CORRECTIONS = 2
 FINISH_STEP_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -88,6 +90,7 @@ Tool 失败后可以根据错误 Observation 调整下一动作，单次 Tool �
 浏览器语义定位命中多个同名元素时，应根据已观察顺序设置 locator.index（从 0 开始），不得原样重复失败的歧义定位。
 浏览器可能打开新标签页；优先复用 observations/pages 中已经到达目标状态的页面，必要时 switch_page。若当前页面已满足步骤目标，禁止再次 navigate 覆盖它。
 一旦 success_criteria 已有证据，应立即调用 finish_step，避免重复 observe 或重复点击耗尽动作额度。
+executor_feedback 是控制层对上一动作的纠偏；必须优先遵守并复用已有 observation，不得原样重试被拦截的重复观察。
 只有当前 Step 的 success_criteria 已有充分 evidence 时才能调用 finish_step。
 finish_step 的 output 必须只包含本步骤实际得到、可交给依赖步骤的结构化结果。
 finish_step 只表示 Executor 声称当前 Step 已具备完成条件，最终是否完成由未来 Verifier 判断。
@@ -123,6 +126,7 @@ class ExecutorDecisionResult:
     fatal_error: bool = False
     context_snapshot: ContextSnapshot | None = None
     usage_metadata: dict[str, Any] | None = None
+    correction_feedback: str | None = None
 
 
 class TaskExecutorLike(Protocol):
@@ -165,6 +169,7 @@ def build_executor_messages(
     verification_feedback: StepVerificationResult | None = None,
     policy_decisions: Sequence[PolicyDecision] = (),
     approval_records: Sequence[ApprovalRecord] = (),
+    executor_feedback: str | None = None,
     context_builder: ContextBuilder | None = None,
 ) -> list[BaseMessage]:
     """兼容入口；实际内容统一由 deterministic ContextBuilder 组装。"""
@@ -178,6 +183,7 @@ def build_executor_messages(
         verification_feedback=verification_feedback,
         policy_decisions=policy_decisions,
         approval_records=approval_records,
+        executor_feedback=executor_feedback,
     )
     return [
         SystemMessage(content=EXECUTOR_SYSTEM_PROMPT),
@@ -224,6 +230,7 @@ class TaskExecutor:
         verification_feedback: StepVerificationResult | None = None,
         policy_decisions: Sequence[PolicyDecision] = (),
         approval_records: Sequence[ApprovalRecord] = (),
+        executor_feedback: str | None = None,
     ) -> ExecutorDecisionResult:
         """调用模型一次并冻结一个动作；绝不执行外部 Tool。"""
 
@@ -247,6 +254,7 @@ class TaskExecutor:
                 verification_feedback=verification_feedback,
                 policy_decisions=policy_decisions,
                 approval_records=approval_records,
+                executor_feedback=executor_feedback,
             )
         except ContextBudgetError as exc:
             # Context 是 deterministic production boundary；核心超限要返回
@@ -335,6 +343,29 @@ class TaskExecutor:
             return ExecutorDecisionResult(
                 error=str(exc), fatal_error=True, context_snapshot=snapshot
             )
+        if name == "browser_observe":
+            streak, page, fingerprint = repeated_observation_streak(
+                tool_calls,
+                step_id=step.id,
+                proposed_arguments=arguments,
+            )
+            if streak >= 2:
+                target = page or "current page"
+                return ExecutorDecisionResult(
+                    correction_feedback=(
+                        "重复观察已被控制层跳过：页面 "
+                        f"{target} 已连续 {streak} 次返回相同内容"
+                        f"（fingerprint={fingerprint[:12] if fingerprint else 'unknown'}）。"
+                        "请直接复用 current_step_observations / observation_reuse；"
+                        "若成功条件已满足则 finish_step，否则选择会产生新信息的不同动作。"
+                    ),
+                    context_snapshot=snapshot,
+                    usage_metadata=(
+                        dict(response.usage_metadata)
+                        if response.usage_metadata is not None
+                        else None
+                    ),
+                )
         return ExecutorDecisionResult(
             action=ExecutorAction(
                 step_id=step.id,
@@ -436,6 +467,7 @@ class TaskExecutor:
         )
         new_records: list[ToolCallRecord] = []
         new_decisions: list[PolicyDecision] = []
+        duplicate_observation_corrections = 0
         seen_call_ids = (
             {record.call_id for record in tool_calls}
             | {record.call_id for record in approval_records}
@@ -554,6 +586,52 @@ class TaskExecutor:
                     policy_decisions=new_decisions,
                     fatal_error=True,
                 )
+
+            if action_name == "browser_observe":
+                streak, page, fingerprint = repeated_observation_streak(
+                    [*tool_calls, *new_records],
+                    step_id=step.id,
+                    proposed_arguments=arguments,
+                )
+                if streak >= 2:
+                    duplicate_observation_corrections += 1
+                    feedback = (
+                        "重复观察已被控制层跳过：页面 "
+                        f"{page or 'current page'} 已连续 {streak} 次返回相同内容"
+                        f"（fingerprint={fingerprint[:12] if fingerprint else 'unknown'}）。"
+                        "请复用已有结果，完成条件满足时调用 finish_step，"
+                        "否则选择会产生新信息的不同动作。"
+                    )
+                    if (
+                        duplicate_observation_corrections
+                        > MAX_DUPLICATE_OBSERVATION_CORRECTIONS
+                    ):
+                        return self._error_result(
+                            step_id=step.id,
+                            action_count=action_count,
+                            error=(
+                                "Executor duplicate observation correction exhausted "
+                                f"after {MAX_DUPLICATE_OBSERVATION_CORRECTIONS} retries"
+                            ),
+                            tool_calls=new_records,
+                            policy_decisions=new_decisions,
+                            fatal_error=True,
+                        )
+                    messages.append(response)
+                    messages.append(
+                        ToolMessage(
+                            content=json.dumps(
+                                {"status": "skipped", "feedback": feedback},
+                                ensure_ascii=False,
+                            ),
+                            tool_call_id=call_id,
+                            name=action_name,
+                            status="error",
+                        )
+                    )
+                    continue
+            else:
+                duplicate_observation_corrections = 0
 
             if self._policy is not None:
                 try:

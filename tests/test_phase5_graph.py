@@ -2,8 +2,11 @@
 
 from collections import defaultdict
 from typing import Any, Sequence
+from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.exceptions import OutputParserException
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from taskpilot.executor import ExecutorRunResult
 from taskpilot.graph import advance_step, build_graph, find_next_executable_step
@@ -21,6 +24,7 @@ from taskpilot.models import (
     VerificationResult,
 )
 from taskpilot.state import TaskState
+from taskpilot.verifier import TaskVerifier
 
 
 class FakeAnalyzer:
@@ -221,6 +225,47 @@ async def test_multi_step_graph_hands_off_verified_result_and_completes() -> Non
     assert [item.step_id for item in step_2_verifier_input] == [1]
     assert verifier.task_call_count == 1
     assert result["verification"].completed is True
+
+
+@pytest.mark.asyncio
+async def test_parser_retry_reinvokes_only_verifier_not_executor() -> None:
+    executor = RecordingExecutor()
+    structured_model = MagicMock()
+    structured_model.invoke.side_effect = [
+        OutputParserException(
+            'Function StepVerificationResult arguments: '
+            '{"step_id":1,"verified":true,"checks":[],'
+            '"feedback": missing quotes} are not valid JSON. '
+            'Received JSONDecodeError Expecting value'
+        ),
+        StepVerificationResult(
+            step_id=1,
+            verified=True,
+            checks=[
+                CriterionCheck(
+                    criterion_index=0,
+                    satisfied=True,
+                    reason="结果存在",
+                )
+            ],
+        ),
+        VerificationResult(completed=True, reason="任务完成"),
+    ]
+    model = MagicMock(spec=BaseChatModel)
+    model.with_structured_output.return_value = structured_model
+
+    result = await build_graph(
+        analyzer=FakeAnalyzer(),
+        planner=OneStepPlanner(),
+        executor=executor,
+        verifier=TaskVerifier(model=model),
+    ).ainvoke(make_initial_state())
+
+    assert result["status"] is TaskStatus.COMPLETED
+    assert executor.call_count_by_step[1] == 1
+    assert structured_model.invoke.call_count == 3
+    retry_messages = structured_model.invoke.call_args_list[1].args[0]
+    assert "Expecting value" in retry_messages[-1][1]
 
 
 @pytest.mark.asyncio

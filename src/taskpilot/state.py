@@ -45,6 +45,9 @@ class TaskState(TypedDict):
     approval_records: list[ApprovalRecord]
     # 每次模型 decision 后递增；审批与崩溃恢复都不能偷偷重置。
     current_action_index: int
+    # 重复 browser_observe 被控制层拦截后的定向反馈与有限纠偏计数。
+    executor_feedback: str | None
+    duplicate_observation_corrections: int
     # 模型 decision 与真实 Tool execution 之间的 durable frozen action。
     pending_executor_action: ExecutorAction | None
     # STARTED 且不可安全重放时保存给人工恢复审查的问题。
@@ -79,6 +82,8 @@ class TaskStateUpdate(TypedDict, total=False):
     policy_decisions: list[PolicyDecision]
     approval_records: list[ApprovalRecord]
     current_action_index: int
+    executor_feedback: str | None
+    duplicate_observation_corrections: int
     pending_executor_action: ExecutorAction | None
     recovery_issue: RecoveryIssue | None
     pending_replan: ReplanRequest | None

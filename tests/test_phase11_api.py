@@ -31,6 +31,7 @@ from taskpilot.persistence import (
 )
 from taskpilot.service import RuntimeComponents, TaskPilotService
 from taskpilot.tools import ToolRegistry
+from taskpilot.trace import TraceEventType
 from taskpilot.vision import VisionConfig, VisionTarget, VisionTargetRequest
 
 
@@ -406,6 +407,36 @@ async def test_service_direct_runtime_completes_and_reads_durable_state(
     assert tool.calls == [{"value": 1}]
 
 
+@pytest.mark.asyncio
+async def test_service_streams_progress_and_records_node_latency(tmp_path: Path) -> None:
+    tool = CountingTool()
+    service = service_for(
+        tmp_path,
+        tool,
+        [tool_call("progress-tool"), finish("progress-finish")],
+    )
+    progress = []
+
+    completed = await service.run_new_task(
+        "Progress task",
+        progress_handler=progress.append,
+    )
+
+    types = [event.event_type for event in progress]
+    assert completed.state["status"].value == "completed"
+    assert TraceEventType.NODE_STARTED in types
+    assert TraceEventType.NODE_COMPLETED in types
+    assert types.index(TraceEventType.TOOL_STARTED) < types.index(
+        TraceEventType.TOOL_SUCCEEDED
+    )
+    assert types.index(TraceEventType.STEP_VERIFIED) < types.index(
+        TraceEventType.TASK_COMPLETED
+    )
+    summary = await service.get_trace_summary(completed.state["task_id"])
+    assert summary.graph_nodes["execute_tool_action"].call_count == 1
+    assert summary.llm_calls["executor"].call_count == 2
+
+
 def test_service_graph_recursion_config_defaults_and_custom_values() -> None:
     service = TaskPilotService()
     custom = TaskPilotService(graph_recursion_limit=60)
@@ -518,6 +549,9 @@ async def test_trace_summary_endpoint_returns_real_aggregation(tmp_path: Path) -
     assert response.status_code == 200
     assert response.json()["tool_call_count"] == 1
     assert response.json()["event_count"] > 0
+    assert response.json()["wall_latency_ms"] >= 0
+    assert response.json()["graph_nodes"]["execute_tool_action"]["call_count"] == 1
+    assert response.json()["llm_calls"]["executor"]["call_count"] == 2
 
 
 @pytest.mark.asyncio

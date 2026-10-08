@@ -220,6 +220,10 @@ Planner 可用，执行层也会明确返回“没有注册任何外部工具”
 Planner 与 Verifier 模型；项目测试全部使用 Fake，离线执行且不需要 API Key。
 Analyzer、Planner、Verifier 与 Replanner 的结构化输出若发生 JSON 解析或 schema
 校验错误，会携带明确的转义提示最多重试 3 次；鉴权、网络等非解析错误不会盲目重试。
+CLI 在运行期间实时输出阶段、步骤、工具与验证进度；终态默认只打印简洁状态和完整
+用户结果。加 `--verbose` 可查看计划、执行声明、验证状态及 Trace 耗时汇总。FAILED
+任务同样会持久化确定性失败总结，其中已验证结果与未验证部分结果会明确分区，任务
+状态不会因此改写为 COMPLETED。
 
 Phase 6 的 Tool Runtime 是统一 async 接口。Host 使用
 `MCPToolProvider → ToolRegistry → TaskExecutor → build_graph()` 连接 MCP，MCP

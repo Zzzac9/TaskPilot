@@ -64,12 +64,24 @@ class TaskView(StrictSchema):
     error: str | None
 
 
+class LatencyStatsView(StrictSchema):
+    call_count: int
+    total_ms: float
+    average_ms: float
+    max_ms: float
+
+
 class TraceSummaryView(StrictSchema):
     event_count: int
     tool_call_count: int
     tool_failure_count: int
+    executor_correction_count: int
     step_rejection_count: int
     replan_count: int
     approval_request_count: int
     recovery_required_count: int
     observed_latency_ms: float
+    wall_latency_ms: float | None
+    graph_nodes: dict[str, LatencyStatsView]
+    llm_calls: dict[str, LatencyStatsView]
+    browser_tools: dict[str, LatencyStatsView]

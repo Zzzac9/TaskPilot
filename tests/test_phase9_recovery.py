@@ -932,7 +932,9 @@ async def test_verifier_retry_count_and_feedback_survive_restart(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_action_level_max_actions_remains_bounded(tmp_path: Path) -> None:
+async def test_action_level_max_actions_remains_bounded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     config = PersistenceConfig.from_state_dir(tmp_path)
     tool = CountingTool(replay_safe=True)
     registry = ToolRegistry()
@@ -960,6 +962,21 @@ async def test_action_level_max_actions_remains_bounded(tmp_path: Path) -> None:
     assert len(tool.calls) == 1
     assert result["step_outcome"].error == "Executor action limit reached: 1"
     assert result["status"] is TaskStatus.FAILED
+    assert result["final_answer"].startswith("## 任务未完成")
+    assert "Executor action limit reached: 1" in result["final_answer"]
+    assert "未验证" in result["final_answer"]
+
+    exit_code = await async_main(
+        ["--resume", "bounded-actions", "--state-dir", str(tmp_path)]
+    )
+    output = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "status=failed" in output
+    assert "final_output:" in output
+    assert "Executor action limit reached: 1" in output
+    assert "plan:" not in output
+    assert "trace_summary=" not in output
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,15 @@ from typing import Any, Protocol, Sequence
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from taskpilot.llm import create_chat_model
-from taskpilot.models import StepResult, TaskSpec, VerificationResult
+from taskpilot.config import redact_sensitive_values
+from taskpilot.models import (
+    PlanStep,
+    StepExecutionOutcome,
+    StepResult,
+    TaskSpec,
+    VerificationResult,
+)
+from taskpilot.policy import redact_preview
 
 
 FINAL_ANSWER_SYSTEM_PROMPT = """你是 TaskPilot 的 Final Answer Writer。
@@ -36,6 +44,8 @@ class FinalAnswerGeneratorLike(Protocol):
 
 class FinalAnswerGenerator:
     """使用独立 Chat Model 调用生成最终自然语言回答。"""
+
+    uses_model = True
 
     def __init__(self, model: BaseChatModel | None = None) -> None:
         self._model = model
@@ -83,6 +93,8 @@ class FinalAnswerGenerator:
 class VerifiedResultsRenderer:
     """离线图测试使用的确定性最终输出，不产生额外模型调用。"""
 
+    uses_model = False
+
     def generate(
         self,
         *,
@@ -98,3 +110,78 @@ class VerifiedResultsRenderer:
         else:
             payload = {}
         return json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def _compact_failure_value(value: Any, *, limit: int = 1_500) -> str:
+    rendered = json.dumps(
+        redact_preview(value), ensure_ascii=False, default=str, sort_keys=True
+    )
+    rendered = redact_sensitive_values(rendered)
+    return rendered if len(rendered) <= limit else rendered[:limit] + "…"
+
+
+def render_failure_answer(
+    *,
+    task_spec: TaskSpec | None,
+    plan: Sequence[PlanStep],
+    current_step_id: int | None,
+    step_results: Sequence[StepResult],
+    step_outcome: StepExecutionOutcome | None,
+    error: str | None,
+    verification: VerificationResult | None,
+) -> str:
+    """Render a bounded failure summary using durable facts only; never calls an LLM."""
+
+    current_step = next(
+        (step for step in plan if step.id == current_step_id),
+        None,
+    )
+    if task_spec is None:
+        stage = "任务分析"
+    elif not plan:
+        stage = "任务规划"
+    elif current_step is not None:
+        stage = f"步骤 {current_step.id}：{current_step.description}"
+    elif verification is not None and not verification.completed:
+        stage = "任务级验证"
+    else:
+        stage = "任务收尾"
+
+    reason = error or (verification.reason if verification is not None else None)
+    reason = redact_sensitive_values(reason or "任务在完成前终止，未提供更多错误信息")
+    if len(reason) > 1_000:
+        reason = reason[:1_000] + "…"
+    lines = [
+        "## 任务未完成",
+        "",
+        f"- 失败阶段：{stage}",
+        f"- 失败原因：{reason}",
+    ]
+
+    if step_results:
+        lines.extend(["", "### 已完成并通过验证的结果"])
+        for result in step_results:
+            lines.append(f"- 步骤 {result.step_id}：{result.summary}")
+            if result.output:
+                lines.append(f"  - 输出：{_compact_failure_value(result.output)}")
+    else:
+        lines.extend(["", "尚无通过验证的步骤结果。"])
+
+    verified_ids = {result.step_id for result in step_results}
+    if step_outcome is not None and step_outcome.step_id not in verified_ids:
+        lines.extend(["", "### 未验证的部分结果（仅供参考）"])
+        if step_outcome.summary:
+            lines.append(f"- 执行摘要：{redact_sensitive_values(step_outcome.summary)}")
+        if step_outcome.output:
+            lines.append(f"- 执行输出：{_compact_failure_value(step_outcome.output)}")
+        if step_outcome.evidence:
+            lines.append(
+                "- 执行证据："
+                + _compact_failure_value(step_outcome.evidence, limit=1_000)
+            )
+        if step_outcome.error and step_outcome.error != error:
+            lines.append(
+                "- 执行错误："
+                + redact_sensitive_values(step_outcome.error)[:1_000]
+            )
+    return "\n".join(lines)

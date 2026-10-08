@@ -36,6 +36,11 @@ class TraceEventType(str, Enum):
     RECOVERY_RESOLVED = "recovery_resolved"
     TASK_VERIFIED = "task_verified"
     TASK_VERIFICATION_REJECTED = "task_verification_rejected"
+    FINAL_ANSWER_GENERATED = "final_answer_generated"
+    EXECUTOR_CORRECTED = "executor_corrected"
+    FAILURE_SUMMARY_GENERATED = "failure_summary_generated"
+    NODE_STARTED = "node_started"
+    NODE_COMPLETED = "node_completed"
 
 
 class TraceEvent(BaseModel):
@@ -53,14 +58,28 @@ class TraceEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class LatencyStats(BaseModel):
+    """同类操作的稳定耗时聚合。"""
+
+    call_count: int
+    total_ms: float
+    average_ms: float
+    max_ms: float
+
+
 class TraceSummary(BaseModel):
     """Phase 12 可直接复用的确定性任务 Trace 聚合。"""
 
     event_count: int
     tool_call_count: int
     tool_failure_count: int
+    executor_correction_count: int
     step_rejection_count: int
     replan_count: int
     approval_request_count: int
     recovery_required_count: int
     observed_latency_ms: float
+    wall_latency_ms: float | None = None
+    graph_nodes: dict[str, LatencyStats] = Field(default_factory=dict)
+    llm_calls: dict[str, LatencyStats] = Field(default_factory=dict)
+    browser_tools: dict[str, LatencyStats] = Field(default_factory=dict)

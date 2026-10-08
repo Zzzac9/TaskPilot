@@ -16,6 +16,7 @@ from taskpilot.models import (
     ToolCallRecord,
     ToolCallStatus,
 )
+from taskpilot.observations import repeated_observation_streak
 
 
 def spec(goal: str = "Find verified candidates") -> TaskSpec:
@@ -63,6 +64,43 @@ def test_context_only_includes_latest_tool_calls() -> None:
     ]
     assert snapshot.included_tool_calls == 2
     assert snapshot.omitted_tool_calls == 3
+
+
+def test_context_collapses_identical_consecutive_browser_observations() -> None:
+    result = {
+        "page_id": "page-1",
+        "url": "https://example.test/results",
+        "title": "Results",
+        "aria_snapshot": "heading Results",
+        "snapshot_mode": "ai",
+        "depth": 5,
+        "truncated": False,
+        "original_length": 15,
+    }
+    records = [
+        ToolCallRecord(
+            call_id=f"observe-{number}",
+            step_id=3,
+            tool_name="browser_observe",
+            arguments={"page_id": "page-1"},
+            status=ToolCallStatus.SUCCESS,
+            result=result,
+        )
+        for number in range(3)
+    ]
+
+    snapshot = ContextBuilder().build_executor_context(
+        task_spec=spec(), step=step(), task_results={}, tool_calls=records
+    )
+
+    assert [
+        item["call_id"] for item in snapshot.content["current_step_observations"]
+    ] == ["observe-2"]
+    assert snapshot.content["observation_reuse"][0]["duplicate_count"] == 2
+    assert snapshot.omitted_tool_calls == 2
+    assert repeated_observation_streak(
+        records, step_id=3, proposed_arguments={"page_id": "page-1", "depth": 8}
+    )[0] == 0
 
 
 def test_large_observation_has_explicit_truncation_marker() -> None:

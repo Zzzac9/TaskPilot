@@ -14,6 +14,7 @@ from taskpilot.models import (
     TaskSpec,
     ToolCallRecord,
 )
+from taskpilot.observations import collapse_repeated_observations
 from taskpilot.policy import ApprovalRecord, PolicyDecision, redact_preview
 
 
@@ -69,6 +70,7 @@ class ContextBuilder:
         verification_feedback: StepVerificationResult | None = None,
         policy_decisions: Sequence[PolicyDecision] = (),
         approval_records: Sequence[ApprovalRecord] = (),
+        executor_feedback: str | None = None,
     ) -> ContextSnapshot:
         """优先保留任务核心、反馈和 verified dependency results。"""
 
@@ -100,6 +102,18 @@ class ContextBuilder:
                 truncated.append("verification_feedback")
         self._add_high_priority(content, "verification_feedback", feedback, truncated)
 
+        compact_executor_feedback, cut = _truncate(
+            executor_feedback, self.config.max_feedback_chars
+        )
+        if cut:
+            truncated.append("executor_feedback")
+        self._add_high_priority(
+            content,
+            "executor_feedback",
+            compact_executor_feedback,
+            truncated,
+        )
+
         dependencies: list[Any] = []
         for result in step_results:
             if result.step_id not in step.depends_on:
@@ -114,7 +128,9 @@ class ContextBuilder:
         self._add_if_fits(content, "dependency_results", dependencies, truncated)
 
         current_calls = [record for record in tool_calls if record.step_id == step.id]
-        selected = current_calls[-self.config.max_recent_tool_calls :]
+        reusable_calls, reuse = collapse_repeated_observations(current_calls)
+        self._add_if_fits(content, "observation_reuse", reuse, truncated)
+        selected = reusable_calls[-self.config.max_recent_tool_calls :]
         if self.config.max_recent_tool_calls == 0:
             selected = []
         observations: list[dict[str, Any]] = []
@@ -127,6 +143,7 @@ class ContextBuilder:
                 {
                     "call_id": record.call_id,
                     "tool_name": record.tool_name,
+                    "arguments_preview": redact_preview(record.arguments),
                     "status": record.status.value,
                     "observation": compact,
                 }

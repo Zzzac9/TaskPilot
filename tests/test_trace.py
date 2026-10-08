@@ -7,6 +7,7 @@ import pytest
 from taskpilot.trace import (
     InMemoryTraceRecorder,
     NoOpTraceRecorder,
+    ProgressTraceRecorder,
     SQLiteTraceRecorder,
     TraceEventType,
     make_trace_event,
@@ -59,11 +60,45 @@ async def test_noop_trace_recorder_is_empty() -> None:
 
 
 @pytest.mark.asyncio
+async def test_progress_recorder_forwards_persisted_redacted_event() -> None:
+    delegate = InMemoryTraceRecorder()
+    forwarded = []
+    recorder = ProgressTraceRecorder(delegate, forwarded.append)
+    event = make_trace_event(
+        task_id="t",
+        event_type=TraceEventType.TOOL_FAILED,
+        payload={"authorization": "Bearer secret", "error": "controlled"},
+    )
+
+    await recorder.record(event)
+
+    assert await delegate.list_events("t") == [event]
+    assert forwarded == [event]
+    assert forwarded[0].payload["authorization"] == "[REDACTED]"
+
+
+@pytest.mark.asyncio
+async def test_progress_handler_failure_does_not_fail_recording() -> None:
+    delegate = InMemoryTraceRecorder()
+
+    def broken_handler(event: object) -> None:
+        raise RuntimeError("display unavailable")
+
+    recorder = ProgressTraceRecorder(delegate, broken_handler)
+    event = make_trace_event(task_id="t", event_type=TraceEventType.TASK_STARTED)
+
+    await recorder.record(event)
+
+    assert await delegate.list_events("t") == [event]
+
+
+@pytest.mark.asyncio
 async def test_trace_summary_counts_real_events_and_latency() -> None:
     recorder = InMemoryTraceRecorder()
     types = [
         TraceEventType.TOOL_STARTED,
         TraceEventType.TOOL_FAILED,
+        TraceEventType.EXECUTOR_CORRECTED,
         TraceEventType.STEP_REJECTED,
         TraceEventType.PLAN_REPLANNED,
         TraceEventType.APPROVAL_REQUESTED,
@@ -74,14 +109,58 @@ async def test_trace_summary_counts_real_events_and_latency() -> None:
             make_trace_event(task_id="t", event_type=event_type, latency_ms=2.5)
         )
     summary = await summarize_task_trace(recorder, "t")
-    assert summary.event_count == 6
+    assert summary.event_count == 7
     assert summary.tool_call_count == 1
     assert summary.tool_failure_count == 1
+    assert summary.executor_correction_count == 1
     assert summary.step_rejection_count == 1
     assert summary.replan_count == 1
     assert summary.approval_request_count == 1
     assert summary.recovery_required_count == 1
-    assert summary.observed_latency_ms == 15.0
+    assert summary.observed_latency_ms == 17.5
+
+
+@pytest.mark.asyncio
+async def test_trace_summary_breaks_down_node_llm_and_browser_latency() -> None:
+    recorder = InMemoryTraceRecorder()
+    events = [
+        make_trace_event(task_id="t", event_type=TraceEventType.TASK_STARTED),
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.NODE_COMPLETED,
+            latency_ms=12.0,
+            payload={"node_name": "analyze_task"},
+        ),
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.TASK_ANALYZED,
+            latency_ms=10.0,
+        ),
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.STEP_REJECTED,
+            latency_ms=2.0,
+            payload={"model_invoked": False},
+        ),
+        make_trace_event(
+            task_id="t",
+            event_type=TraceEventType.TOOL_SUCCEEDED,
+            latency_ms=7.0,
+            payload={"tool_name": "browser_navigate"},
+        ),
+        make_trace_event(task_id="t", event_type=TraceEventType.TASK_COMPLETED),
+    ]
+    for event in events:
+        await recorder.record(event)
+
+    summary = await summarize_task_trace(recorder, "t")
+
+    assert summary.graph_nodes["analyze_task"].total_ms == 12.0
+    assert summary.llm_calls["analyzer"].total_ms == 10.0
+    assert "step_verifier" not in summary.llm_calls
+    assert summary.browser_tools["browser_navigate"].total_ms == 7.0
+    assert summary.observed_latency_ms == 19.0
+    assert summary.wall_latency_ms is not None
 
 
 @pytest.mark.asyncio

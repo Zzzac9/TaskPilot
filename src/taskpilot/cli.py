@@ -18,7 +18,114 @@ from taskpilot.service import (
     TaskPilotService,
     create_initial_state as create_initial_state,
 )
+from taskpilot.trace import TraceEvent, TraceEventType
 from taskpilot.vision import VisionConfig
+
+
+_PROGRESS_NODE_LABELS = {
+    "analyze_task": "分析任务",
+    "plan_task": "生成计划",
+    "decide_action": "决定下一动作",
+    "execute_tool_action": "执行工具",
+    "verify_step": "验证当前步骤",
+    "verify_task": "验证整个任务",
+    "replan_task": "重新规划",
+    "prepare_approval": "准备人工审批",
+    "human_approval": "处理人工审批",
+    "recovery_review": "检查崩溃恢复",
+}
+
+
+def _progress_latency(event: TraceEvent) -> str:
+    return f" ({event.latency_ms:.0f} ms)" if event.latency_ms is not None else ""
+
+
+def _progress_detail(value: Any, *, max_chars: int = 240) -> str:
+    detail = redact_sensitive_values(str(value or "")).replace("\r", " ").replace(
+        "\n", " "
+    )
+    return detail if len(detail) <= max_chars else detail[:max_chars] + "…"
+
+
+def render_progress_event(event: TraceEvent) -> str | None:
+    """把已脱敏 Trace 转成紧凑进度；执行完成声明不冒充验证通过。"""
+
+    prefix = "[progress]"
+    step = f" step={event.step_id}" if event.step_id is not None else ""
+    latency = _progress_latency(event)
+    payload = event.payload
+    if event.event_type is TraceEventType.NODE_STARTED:
+        node_name = str(payload.get("node_name") or "")
+        label = _PROGRESS_NODE_LABELS.get(node_name)
+        return f"{prefix} phase={label}{step}" if label else None
+    if event.event_type is TraceEventType.TASK_STARTED:
+        return f"{prefix} task started"
+    if event.event_type is TraceEventType.TASK_ANALYZED:
+        return f"{prefix} task analysis {event.status}{latency}"
+    if event.event_type is TraceEventType.PLAN_CREATED:
+        return f"{prefix} plan ready steps={len(payload.get('step_ids') or [])}{latency}"
+    if event.event_type is TraceEventType.PLAN_REPLANNED:
+        return f"{prefix} plan revised status={event.status}{latency}"
+    if event.event_type is TraceEventType.STEP_STARTED:
+        position = payload.get("step_position")
+        total = payload.get("step_total")
+        progress = f" progress={position}/{total}" if position and total else ""
+        return f"{prefix} step started{step}{progress}"
+    if event.event_type is TraceEventType.LLM_ACTION_DECIDED:
+        action_type = payload.get("action_type")
+        if action_type == "finish_step":
+            return (
+                f"{prefix} executor result prepared{step}; "
+                "awaiting step verification"
+                f"{latency}"
+            )
+        tool_name = payload.get("tool_name")
+        return f"{prefix} executor selected tool={tool_name}{step}{latency}"
+    if event.event_type is TraceEventType.EXECUTOR_CORRECTED:
+        reason = _progress_detail(payload.get("reason"))
+        return f"{prefix} duplicate observation skipped{step} reason={reason}"
+    if event.event_type is TraceEventType.TOOL_STARTED:
+        return f"{prefix} tool started name={payload.get('tool_name')}{step}"
+    if event.event_type is TraceEventType.TOOL_SUCCEEDED:
+        return f"{prefix} tool succeeded name={payload.get('tool_name')}{step}{latency}"
+    if event.event_type is TraceEventType.TOOL_FAILED:
+        error = _progress_detail(payload.get("error"))
+        return (
+            f"{prefix} tool failed name={payload.get('tool_name')}{step}{latency}"
+            f" error={error}"
+        )
+    if event.event_type is TraceEventType.TOOL_MATERIALIZED_FROM_JOURNAL:
+        return f"{prefix} tool result restored name={payload.get('tool_name')}{step}"
+    if event.event_type is TraceEventType.STEP_VERIFIED:
+        return f"{prefix} step verification passed{step}{latency}"
+    if event.event_type is TraceEventType.STEP_REJECTED:
+        feedback = _progress_detail(payload.get("feedback"))
+        return f"{prefix} step verification rejected{step}{latency} feedback={feedback}"
+    if event.event_type is TraceEventType.TASK_VERIFIED:
+        return f"{prefix} task verification passed; preparing final output{latency}"
+    if event.event_type is TraceEventType.TASK_VERIFICATION_REJECTED:
+        reason = _progress_detail(payload.get("reason"))
+        return f"{prefix} task verification rejected{latency} reason={reason}"
+    if event.event_type is TraceEventType.FINAL_ANSWER_GENERATED:
+        return f"{prefix} final output generation {event.status}{latency}"
+    if event.event_type is TraceEventType.FAILURE_SUMMARY_GENERATED:
+        return f"{prefix} failure summary prepared{step}"
+    if event.event_type is TraceEventType.APPROVAL_REQUESTED:
+        return f"{prefix} waiting for approval tool={payload.get('tool_name')}{step}"
+    if event.event_type is TraceEventType.RECOVERY_REQUIRED:
+        return f"{prefix} recovery review required tool={payload.get('tool_name')}{step}"
+    if event.event_type is TraceEventType.TASK_COMPLETED:
+        return f"{prefix} task completed after verification"
+    if event.event_type is TraceEventType.TASK_FAILED:
+        error = _progress_detail(payload.get("error"))
+        return f"{prefix} task failed error={error}"
+    return None
+
+
+def print_progress_event(event: TraceEvent) -> None:
+    message = render_progress_event(event)
+    if message is not None:
+        print(message, flush=True)
 
 
 def render_final_output(result: Mapping[str, Any]) -> str | None:
@@ -65,6 +172,8 @@ def interactive_task_argv(args: argparse.Namespace, task: str) -> list[str]:
         argv.append("--browser")
     if args.headed:
         argv.append("--headed")
+    if getattr(args, "verbose", False):
+        argv.append("--verbose")
     argv.extend(["--recursion-limit", str(args.recursion_limit)])
     return argv
 
@@ -168,6 +277,11 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         default=500,
         help="Maximum LangGraph transitions for one invocation (default: 500)",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print the full plan, execution state, and trace summary",
+    )
     args = parser.parse_args(argv)
 
     if args.headed and not args.browser:
@@ -196,6 +310,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
             run = await service.run_new_task(
                 args.task,
                 enable_browser=args.browser,
+                progress_handler=print_progress_event,
             )
         else:
             assert args.resume is not None
@@ -209,7 +324,10 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
             ):
                 print("task already failed; automatic restart is disabled")
             elif run.next_nodes and run.interrupt is None:
-                run = await service.continue_task(args.resume)
+                run = await service.continue_task(
+                    args.resume,
+                    progress_handler=print_progress_event,
+                )
     except TaskNotFoundError:
         print(f"error=no durable checkpoint found for task_id={args.resume}")
         return 1
@@ -260,70 +378,79 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
             task_id,
             interrupt_type=payload["type"],
             response=resume,
+            progress_handler=print_progress_event,
         )
     result = run.state
-    trace_summary = await service.get_trace_summary(task_id)
     status = result["status"]
     status_value = status.value if isinstance(status, TaskStatus) else str(status)
     print(f"task_id={result['task_id']}")
     print(f"status={status_value}")
-    task_spec = result.get("task_spec")
-    if task_spec is not None:
-        print(f"goal={task_spec.goal}")
-        print(
-            "constraints="
-            + json.dumps(task_spec.constraints, ensure_ascii=False, sort_keys=True)
-        )
-        print(f"expected_output={task_spec.expected_output}")
-        print(
-            "completion_criteria="
-            + json.dumps(task_spec.completion_criteria, ensure_ascii=False)
-        )
-    print("plan:")
-    for step in result.get("plan", []):
-        print(f"  step_id={step.id}")
-        print(f"    description={step.description}")
-        print(f"    depends_on={json.dumps(step.depends_on)}")
-        print(
-            "    success_criteria="
-            + json.dumps(step.success_criteria, ensure_ascii=False)
-        )
-        print(f"    status={step.status.value}")
-    print(f"current_step_id={result.get('current_step_id')}")
-    print(f"plan_revision={result.get('plan_revision', 0)}")
-    print(f"replan_count={result.get('replan_count', 0)}")
-    if trace_summary is not None:
-        print("trace_summary=" + trace_summary.model_dump_json())
     step_outcome = result.get("step_outcome")
-    if step_outcome is not None:
-        print(f"claimed_complete={step_outcome.claimed_complete}")
-        print(f"action_count={step_outcome.action_count}")
-        print(f"execution_summary={step_outcome.summary}")
+    if args.verbose:
+        trace_summary = await service.get_trace_summary(task_id)
+        task_spec = result.get("task_spec")
+        if task_spec is not None:
+            print(f"goal={task_spec.goal}")
+            print(
+                "constraints="
+                + json.dumps(task_spec.constraints, ensure_ascii=False, sort_keys=True)
+            )
+            print(f"expected_output={task_spec.expected_output}")
+            print(
+                "completion_criteria="
+                + json.dumps(task_spec.completion_criteria, ensure_ascii=False)
+            )
+        print("plan:")
+        for step in result.get("plan", []):
+            print(f"  step_id={step.id}")
+            print(f"    description={step.description}")
+            print(f"    depends_on={json.dumps(step.depends_on)}")
+            print(
+                "    success_criteria="
+                + json.dumps(step.success_criteria, ensure_ascii=False)
+            )
+            print(f"    status={step.status.value}")
+        print(f"current_step_id={result.get('current_step_id')}")
+        print(f"plan_revision={result.get('plan_revision', 0)}")
+        print(f"replan_count={result.get('replan_count', 0)}")
+        if trace_summary is not None:
+            print("trace_summary=" + trace_summary.model_dump_json())
+        if step_outcome is not None:
+            print(f"claimed_complete={step_outcome.claimed_complete}")
+            print(f"action_count={step_outcome.action_count}")
+            print(f"execution_summary={step_outcome.summary}")
+            print(
+                "execution_evidence="
+                + json.dumps(step_outcome.evidence, ensure_ascii=False)
+            )
+            print(
+                "execution_output="
+                + json.dumps(step_outcome.output, ensure_ascii=False)
+            )
+            if step_outcome.error:
+                print(f"execution_error={step_outcome.error}")
         print(
-            "execution_evidence="
-            + json.dumps(step_outcome.evidence, ensure_ascii=False)
+            "step_results="
+            + json.dumps(
+                [
+                    item.model_dump(mode="json")
+                    for item in result.get("step_results", [])
+                ],
+                ensure_ascii=False,
+            )
         )
-        print("execution_output=" + json.dumps(step_outcome.output, ensure_ascii=False))
-        if step_outcome.error:
-            print(f"execution_error={step_outcome.error}")
-    print(
-        "step_results="
-        + json.dumps(
-            [item.model_dump(mode="json") for item in result.get("step_results", [])],
-            ensure_ascii=False,
-        )
-    )
-    verification = result.get("verification")
-    if verification is not None:
-        print(f"task_verified={verification.completed}")
-        print(f"verification_reason={verification.reason}")
-    if status_value == TaskStatus.COMPLETED.value:
+        verification = result.get("verification")
+        if verification is not None:
+            print(f"task_verified={verification.completed}")
+            print(f"verification_reason={verification.reason}")
+    if status_value in {TaskStatus.COMPLETED.value, TaskStatus.FAILED.value}:
         final_output = render_final_output(result)
         if final_output is not None:
             print("\nfinal_output:")
             print(final_output)
-    if result.get("error"):
+    if result.get("error") and args.verbose:
         print(f"error={result['error']}")
+    if result.get("error"):
         return 1
     if step_outcome is not None and step_outcome.error:
         return 1
