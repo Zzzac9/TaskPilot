@@ -13,6 +13,7 @@ def shell_args(**overrides: object) -> argparse.Namespace:
     values = {
         "state_dir": cli.Path(".taskpilot"),
         "mcp_config": None,
+        "filesystem_root": None,
         "browser": True,
         "headed": True,
         "recursion_limit": 500,
@@ -22,7 +23,10 @@ def shell_args(**overrides: object) -> argparse.Namespace:
 
 
 def test_interactive_task_argv_preserves_shell_capabilities() -> None:
-    args = shell_args(mcp_config=cli.Path("mcp.json"))
+    args = shell_args(
+        mcp_config=cli.Path("mcp.json"),
+        filesystem_root=cli.Path("artifacts"),
+    )
 
     argv = cli.interactive_task_argv(args, "搜索华为招聘")
 
@@ -32,6 +36,8 @@ def test_interactive_task_argv_preserves_shell_capabilities() -> None:
         ".taskpilot",
         "--mcp-config",
         "mcp.json",
+        "--filesystem-root",
+        "artifacts",
         "--browser",
         "--headed",
         "--recursion-limit",

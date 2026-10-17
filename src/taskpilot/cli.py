@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from taskpilot.browser import BrowserConfig
 from taskpilot.config import Settings, redact_sensitive_values
+from taskpilot.filesystem_mcp import create_filesystem_mcp_config
 from taskpilot.mcp.config import load_mcp_server_configs
 from taskpilot.models import TaskStatus
 from taskpilot.persistence import PersistenceConfig
@@ -168,6 +169,8 @@ def interactive_task_argv(args: argparse.Namespace, task: str) -> list[str]:
     argv = [task, "--state-dir", str(args.state_dir)]
     if args.mcp_config is not None:
         argv.extend(["--mcp-config", str(args.mcp_config)])
+    if getattr(args, "filesystem_root", None) is not None:
+        argv.extend(["--filesystem-root", str(args.filesystem_root)])
     if args.browser:
         argv.append("--browser")
     if args.headed:
@@ -256,6 +259,14 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         help="JSON file containing MCP server configurations",
     )
     parser.add_argument(
+        "--filesystem-root",
+        type=Path,
+        help=(
+            "Enable the bundled Filesystem MCP and restrict all file access "
+            "to this directory"
+        ),
+    )
+    parser.add_argument(
         "--browser",
         action="store_true",
         help="Enable the Playwright Chromium Browser Tools",
@@ -297,6 +308,8 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     mcp_configs = (
         load_mcp_server_configs(args.mcp_config) if args.mcp_config is not None else []
     )
+    if args.filesystem_root is not None:
+        mcp_configs.append(create_filesystem_mcp_config(args.filesystem_root))
     service = TaskPilotService(
         persistence_config,
         mcp_configs=mcp_configs,

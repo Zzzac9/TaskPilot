@@ -117,6 +117,14 @@ Planner → Executor → Verifier
 - Runtime Reliability/Safety fault-injection suite
 - Production Service Graph recursion safety fuse configurable by the Host
 
+### Phase 13
+
+- First-party local Filesystem MCP over the existing STDIO provider
+- Sandboxed UTF-8 read/create and dependency-free `.docx` generation
+- Canonical path containment and race-safe create-only writes
+- Browser + Filesystem MCP registration in the shared `ToolRegistry`
+- Real Browser → MCP → Word full-Graph test with independent OOXML content checks
+
 生产 `TaskExecutor` 当前状态图为：
 
 ```text
@@ -214,9 +222,9 @@ Host 环境变量与独立模型配置，不会在缺少配置时假装启用。
 使用 `/exit` 或 `/quit` 退出。Browser、MCP 与 state-dir 参数会沿用到每次输入；每次输入
 仍创建独立 task 和 checkpoint，不会自动继承上一条任务的对话上下文。
 
-CLI 会运行当前 Graph，但生产环境尚未注册真实 Executor Tool。即使 Analyzer 与
-Planner 可用，执行层也会明确返回“没有注册任何外部工具”，不会伪造搜索结果或
-声称步骤或任务已经完成。默认 CLI 还需要配置兼容 OpenAI 接口的 Analyzer、
+CLI 会运行当前 Graph；只有显式启用 Browser、Filesystem MCP 或提供 MCP 配置时才会
+注册对应 Executor Tool。没有启用任何 Tool 时，执行层会明确返回“没有注册任何外部
+工具”，不会伪造搜索结果或声称步骤或任务已经完成。默认 CLI 还需要配置兼容 OpenAI 接口的 Analyzer、
 Planner 与 Verifier 模型；项目测试全部使用 Fake，离线执行且不需要 API Key。
 Analyzer、Planner、Verifier 与 Replanner 的结构化输出若发生 JSON 解析或 schema
 校验错误，会携带明确的转义提示最多重试 3 次；鉴权、网络等非解析错误不会盲目重试。
@@ -253,7 +261,8 @@ python -m taskpilot.cli "执行任务" --mcp-config mcp.json
 ```
 
 STDIO 只额外传入配置文件显式声明的 `env`；不会把 `LLM_API_KEY` 无脑发送给
-第三方 MCP Server。当前没有自动重连、HTTP auth policy 或 HITL 风险策略。
+第三方 MCP Server。当前没有自动重连或 HTTP auth policy；Tool 风险统一经过下述
+Phase 8 Policy。
 
 Phase 7 可由 Host 启用长生命周期 Chromium；Browser 不是 LangGraph node：
 
@@ -262,6 +271,27 @@ python -m taskpilot.cli "在网页中执行任务" --browser
 python -m taskpilot.cli "组合浏览器与 MCP 工具" --browser --mcp-config mcp.json
 python -m taskpilot.cli "显示浏览器窗口" --browser --headed
 ```
+
+Phase 13 内置的本地 Filesystem MCP 可通过 `--filesystem-root` 启用。所有 Tool path
+都必须是该目录下的相对路径；绝对路径、`..` 越界和解析到根目录外的符号链接会被
+拒绝。写文本和生成 Word 都只允许创建新文件，已有文件不会被覆盖。读取限制为 UTF-8
+文本，单文件上限 1 MiB；Word MVP 接受标题、正文段落和可选来源列表。
+
+下面的两个 PowerShell 命令可复现 Browser → 本地 MCP → Word 链路（先确保 `.env`
+中的 LLM 配置可用）：
+
+```powershell
+# Terminal 1：启动仓库自带的确定性网页
+.\.venv-benchmark\Scripts\python.exe -m http.server 8000 --directory tests\fixtures\browser_site
+
+# Terminal 2：浏览网页、整理两家健身房月费，并生成新的 Word 文档
+.\.venv-benchmark\Scripts\python.exe -m taskpilot.cli `
+  "打开 http://127.0.0.1:8000/details.html，整理健身房名称和月费，生成 gyms.docx" `
+  --browser --filesystem-root .\artifacts\phase13-demo --verbose
+```
+
+生成结果位于 `artifacts/phase13-demo/gyms.docx`。重复演示前应改用新的文件名或新的
+根目录，因为 Filesystem MCP 不提供覆盖开关。
 
 Browser Tool 只接受 HTTP(S) 导航，操作优先使用 role、label、test id 等语义
 Locator；CSS 仅作 fallback，不提供任意 JavaScript 执行工具。下载与截图只能写入
