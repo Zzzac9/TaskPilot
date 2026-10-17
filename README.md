@@ -175,7 +175,6 @@ Step 若自身超限会明确报错，不会为保留旧 Tool history 而静默�
 - OpenTelemetry exporter / distributed tracing backend
 - Authentication / Authorization / background workers
 - Vision fallback for fill, select, check, drag or desktop automation
-- Real external Vision model benchmark validation
 
 ## Phase 12 Benchmark-verified 结果
 
@@ -333,9 +332,26 @@ python -m taskpilot.cli "点击当前页面的 Canvas Action" --browser
 ```
 
 默认离线测试使用 deterministic Fake Vision targeter 加真实本地 Chromium canvas；真实
-外部多模态 provider 测试必须显式设置 `TASKPILOT_RUN_VISION_INTEGRATION=1`。当前实现
-不代表真实视觉模型已经完成 benchmark，也没有完整解决网页 Prompt Injection；截图中
-的网页文字只作为 untrusted environment data 交给最小视觉定位 prompt。
+外部多模态 provider 测试必须显式设置 `TASKPILOT_RUN_VISION_INTEGRATION=1`。截图中的
+网页文字只作为 untrusted environment data 交给最小视觉定位 prompt，当前实现仍没有
+完整解决网页 Prompt Injection。
+
+`deepseek-flash` 真实 Vision benchmark 使用三个独立 Canvas 场景，分别验证中央、右上、
+左下目标，并用页面状态和目标矩形 oracle 验证坐标点击结果。DeepSeek 默认开启 thinking，
+而结构化输出会指定 `tool_choice`；Vision client 因此只对 `deepseek-flash` 显式关闭
+thinking。可复现命令：
+
+```powershell
+$env:VISION_API_KEY = "your-deepseek-key"
+$env:VISION_BASE_URL = "https://api.deepseek.com"
+.\.venv-benchmark\Scripts\python.exe -m benchmarks.phase11_real_vision `
+  --attempts-per-scene 1
+```
+
+每次执行都会新建 `artifacts/phase11-real-vision/<UTC timestamp>/`，保存安全的 PNG
+哈希/尺寸、结构化坐标、置信度、Policy 决策、点击后的真实页面状态和汇总报告；不会保存
+截图或 base64。一次默认执行共 3 次模型调用。2026-10-17 的本地验收结果为 3/3，
+False Click 0/3；这是固定 localhost fixture 的小样本结果，不代表公开网页泛化能力。
 
 当前 Browser Executor 已为检测到的高风险 Tool action 增加人工审批，但这不是完整
 生产安全保证，不能据此声称适合任意生产站点的外部写操作。

@@ -59,6 +59,12 @@ class MultimodalVisionTargeter:
         }
         if self.config.base_url:
             options["base_url"] = self.config.base_url
+        # DeepSeek enables thinking mode by default. Its Chat Completions API
+        # rejects the named tool_choice emitted by with_structured_output while
+        # thinking is enabled, so this model-specific compatibility setting is
+        # required for the structured VisionTarget contract.
+        if self.config.model == "deepseek-flash":
+            options["extra_body"] = {"thinking": {"type": "disabled"}}
         self._model = ChatOpenAI(**options)
         return self._model
 

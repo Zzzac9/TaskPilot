@@ -88,6 +88,25 @@ Primary artifacts 包含 `config.json`、`environment.json`、`tasks.json`、`ru
 Token usage 只有 provider 返回真实 usage metadata 时才记录，否则为 `null`。
 Fake Vision 只属于 reliability suite，不能用于宣称真实 Vision model 提升。
 
+## Real DeepSeek Vision fallback
+
+Phase 11 的真实视觉验收独立于 Phase 12 Primary 指标。它使用真实 Chromium viewport
+截图和 `deepseek-flash`，让 DOM role locator 先确定性失败，再验证 HIGH-risk approval、
+结构化坐标、坐标点击和页面 side effect：
+
+```powershell
+$env:VISION_API_KEY = "your-deepseek-key"
+$env:VISION_BASE_URL = "https://api.deepseek.com"
+.\.venv-benchmark\Scripts\python.exe -m benchmarks.phase11_real_vision `
+  --attempts-per-scene 1
+```
+
+默认覆盖 center、top-right、bottom-left 三个带干扰项的 Canvas 场景。每个 attempt 使用
+独立 Browser artifact 目录，结果写入新的
+`artifacts/phase11-real-vision/<UTC timestamp>/`。成功必须同时满足真实 PNG 输入、审批前
+零 Vision 调用、HIGH + require_approval、结构化目标、坐标落入 oracle 矩形、Vision
+interaction mode 和页面点击状态改变。
+
 ## Final Phase 12 status
 
 Real LLM smoke pipeline 已通过基础设施 gate；Primary、No-Replan、stability attempts 2/3

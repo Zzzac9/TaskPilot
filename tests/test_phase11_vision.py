@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from playwright.async_api import Error as PlaywrightError
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from taskpilot.browser import (
     BrowserConfig,
@@ -258,6 +258,30 @@ async def test_multimodal_targeter_uses_png_data_url_and_untrusted_prompt() -> N
     image_url = cast(dict[str, Any], content[1])["image_url"]["url"]
     assert image_url.startswith("data:image/png;base64,")
     assert base64.b64decode(image_url.split(",", 1)[1]) == b"\x89PNG\r\n"
+
+
+def test_deepseek_flash_disables_thinking_only_in_vision_targeter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    sentinel = object()
+
+    def fake_chat_openai(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr("taskpilot.vision.targeter.ChatOpenAI", fake_chat_openai)
+    targeter = MultimodalVisionTargeter(
+        VisionConfig(
+            enabled=True,
+            model="deepseek-flash",
+            api_key=SecretStr("test-key"),
+            base_url="https://api.deepseek.com",
+        )
+    )
+
+    assert targeter._active_model() is sentinel
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 @pytest.mark.asyncio

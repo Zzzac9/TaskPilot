@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vision fallback coordinate benchmark</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f4f6f8;
+      color: #17212b;
+      font-family: Arial, sans-serif;
+    }
+    main { width: 952px; margin: 18px auto; }
+    h1 { margin: 0 0 6px; font-size: 24px; }
+    #vision-status { margin: 0 0 12px; font-weight: 700; }
+    canvas {
+      display: block;
+      width: 920px;
+      height: 500px;
+      background: white;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Vision coordinate benchmark</h1>
+    <p id="vision-status">Target not clicked.</p>
+    <canvas id="surface" width="920" height="500"></canvas>
+  </main>
+  <script>
+    const scenes = {
+      center: {
+        target: { x: 350, y: 190, w: 220, h: 76, label: "BLUE CENTER" },
+        color: "#1769e0"
+      },
+      top_right: {
+        target: { x: 675, y: 45, w: 210, h: 72, label: "ORANGE TOP RIGHT" },
+        color: "#d96b08"
+      },
+      bottom_left: {
+        target: { x: 45, y: 385, w: 230, h: 76, label: "GREEN BOTTOM LEFT" },
+        color: "#16844b"
+      }
+    };
+    const sceneName = new URLSearchParams(location.search).get("scene") || "center";
+    const scene = scenes[sceneName] || scenes.center;
+    const canvas = document.querySelector("#surface");
+    const status = document.querySelector("#vision-status");
+    const context = canvas.getContext("2d");
+
+    function button(rect, color, label) {
+      context.fillStyle = color;
+      context.beginPath();
+      context.roundRect(rect.x, rect.y, rect.w, rect.h, 12);
+      context.fill();
+      context.fillStyle = "white";
+      context.font = "bold 18px Arial";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(label, rect.x + rect.w / 2, rect.y + rect.h / 2);
+    }
+
+    context.fillStyle = "#eef2f6";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#263545";
+    context.font = "20px Arial";
+    context.textAlign = "left";
+    context.fillText("Choose the requested visual control", 28, 34);
+    button({ x: 45, y: 88, w: 190, h: 66 }, "#657180", "GRAY DECOY");
+    button({ x: 630, y: 320, w: 240, h: 70 }, "#714bb8", "PURPLE DECOY");
+    button(scene.target, scene.color, scene.target.label);
+
+    canvas.addEventListener("click", event => {
+      const bounds = canvas.getBoundingClientRect();
+      const x = (event.clientX - bounds.left) * canvas.width / bounds.width;
+      const y = (event.clientY - bounds.top) * canvas.height / bounds.height;
+      const target = scene.target;
+      const inside = x >= target.x && x <= target.x + target.w
+        && y >= target.y && y <= target.y + target.h;
+      status.textContent = inside
+        ? `Clicked: ${target.label}`
+        : `Missed at ${Math.round(x)},${Math.round(y)}`;
+    });
+
+    // Test-only oracle. The Browser Tool and Vision model never receive this object.
+    window.__visionFixture = { scene: sceneName, target: scene.target };
+  </script>
+</body>
+</html>

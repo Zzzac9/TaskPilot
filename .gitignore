@@ -283,9 +283,11 @@ crawled_data/
 # TaskPilot Browser Tool 运行产物
 artifacts/browser/
 artifacts/phase13-real-llm/
+artifacts/phase11-real-vision/
 tests/.artifacts/
 tests/.tmp/
 .taskpilot/
+/AGENTS.md
 
 # 临时文件
 tmp/
