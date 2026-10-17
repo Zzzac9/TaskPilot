@@ -74,6 +74,7 @@ async def test_real_filesystem_mcp_read_write_docx_and_policy(tmp_path: Path) ->
         assert {item.name for item in adapters} == {
             "filesystem__read_file",
             "filesystem__write_file",
+            "filesystem__read_docx",
             "filesystem__generate_docx",
         }
 
@@ -93,6 +94,10 @@ async def test_real_filesystem_mcp_read_write_docx_and_policy(tmp_path: Path) ->
                 "paragraphs": ["Harbor Gym costs HKD 420 per month."],
                 "sources": ["http://127.0.0.1/example"],
             },
+        )
+        read_docx_result = await registry.invoke(
+            "filesystem__read_docx",
+            {"path": "reports/gyms.docx"},
         )
 
         with pytest.raises(MCPToolExecutionError, match="outside"):
@@ -132,6 +137,12 @@ async def test_real_filesystem_mcp_read_write_docx_and_policy(tmp_path: Path) ->
     assert write_result["structured_content"]["path"] == "research.txt"
     assert read_result["structured_content"]["content"] == "Harbor Gym: HKD 420"
     assert docx_result["structured_content"]["path"] == "reports/gyms.docx"
+    assert read_docx_result["structured_content"]["paragraphs"] == [
+        "Gym Research",
+        "Harbor Gym costs HKD 420 per month.",
+        "Sources",
+        "http://127.0.0.1/example",
+    ]
     assert _docx_text(root / "reports" / "gyms.docx") == [
         "Gym Research",
         "Harbor Gym costs HKD 420 per month.",

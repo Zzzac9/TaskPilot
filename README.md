@@ -120,7 +120,7 @@ Planner → Executor → Verifier
 ### Phase 13
 
 - First-party local Filesystem MCP over the existing STDIO provider
-- Sandboxed UTF-8 read/create and dependency-free `.docx` generation
+- Sandboxed UTF-8 read/create plus dependency-free `.docx` generation/inspection
 - Canonical path containment and race-safe create-only writes
 - Browser + Filesystem MCP registration in the shared `ToolRegistry`
 - Real Browser → MCP → Word full-Graph test with independent OOXML content checks
@@ -275,7 +275,8 @@ python -m taskpilot.cli "显示浏览器窗口" --browser --headed
 Phase 13 内置的本地 Filesystem MCP 可通过 `--filesystem-root` 启用。所有 Tool path
 都必须是该目录下的相对路径；绝对路径、`..` 越界和解析到根目录外的符号链接会被
 拒绝。写文本和生成 Word 都只允许创建新文件，已有文件不会被覆盖。读取限制为 UTF-8
-文本，单文件上限 1 MiB；Word MVP 接受标题、正文段落和可选来源列表。
+文本，单文件上限 1 MiB；Word MVP 接受标题、正文段落和可选来源列表，并可通过只读
+`filesystem__read_docx` 返回可见段落，供 Agent 和 Verifier 核验真实产物。
 
 下面的两个 PowerShell 命令可复现 Browser → 本地 MCP → Word 链路（先确保 `.env`
 中的 LLM 配置可用）：
@@ -292,6 +293,17 @@ Phase 13 内置的本地 Filesystem MCP 可通过 `--filesystem-root` 启用。�
 
 生成结果位于 `artifacts/phase13-demo/gyms.docx`。重复演示前应改用新的文件名或新的
 根目录，因为 Filesystem MCP 不提供覆盖开关。
+
+真实 LLM 稳定性验证会用独立目录连续执行至少三次，并以外部 OOXML 解析器核对标题、
+网页事实、来源 URL 和 durable Task 状态：
+
+```powershell
+.\.venv-benchmark\Scripts\python.exe -m benchmarks.phase13_real_llm `
+  --attempts 3 --timeout-seconds 240
+```
+
+每次运行的 `state.json`、`trace.json`、Word 文件、独立 oracle 和汇总报告写入新的
+`artifacts/phase13-real-llm/<UTC timestamp>/`，不会把 Agent 的完成声明直接当成成功。
 
 Browser Tool 只接受 HTTP(S) 导航，操作优先使用 role、label、test id 等语义
 Locator；CSS 仅作 fallback，不提供任意 JavaScript 执行工具。下载与截图只能写入

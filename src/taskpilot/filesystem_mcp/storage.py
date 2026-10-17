@@ -5,11 +5,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from xml.sax.saxutils import escape
-from zipfile import ZIP_DEFLATED, ZipFile
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile
 
 
 MAX_TEXT_BYTES = 1_048_576
 MAX_DOCX_PARAGRAPHS = 1_000
+MAX_DOCX_BYTES = 5_242_880
+MAX_DOCX_XML_BYTES = 4_194_304
+_WORD_NAMESPACE = {
+    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+}
 
 
 class FilesystemSandboxError(ValueError):
@@ -99,6 +105,44 @@ class SandboxedFilesystem:
         return {
             "path": target.relative_to(self.root).as_posix(),
             "bytes": len(encoded),
+        }
+
+    def read_docx(self, relative_path: str) -> dict[str, str | int | list[str]]:
+        """Read visible paragraphs from a bounded Word OOXML document."""
+
+        if not relative_path.lower().endswith(".docx"):
+            raise FilesystemSandboxError("Word input path must end with .docx")
+        target = self.resolve(relative_path)
+        if not target.is_file():
+            raise FilesystemSandboxError("file does not exist or is not a regular file")
+        size = target.stat().st_size
+        if size > MAX_DOCX_BYTES:
+            raise FilesystemSandboxError(
+                f"Word file exceeds the {MAX_DOCX_BYTES}-byte read limit"
+            )
+        try:
+            with ZipFile(target) as archive:
+                document_info = archive.getinfo("word/document.xml")
+                if document_info.file_size > MAX_DOCX_XML_BYTES:
+                    raise FilesystemSandboxError(
+                        "Word document XML exceeds the safe read limit"
+                    )
+                document = ElementTree.fromstring(
+                    archive.read("word/document.xml")
+                )
+        except (BadZipFile, KeyError, ElementTree.ParseError) as exc:
+            raise FilesystemSandboxError("file is not a valid Word document") from exc
+        paragraphs = [
+            "".join(
+                node.text or ""
+                for node in item.findall(".//w:t", _WORD_NAMESPACE)
+            )
+            for item in document.findall(".//w:p", _WORD_NAMESPACE)
+        ]
+        return {
+            "path": target.relative_to(self.root).as_posix(),
+            "bytes": size,
+            "paragraphs": paragraphs,
         }
 
     def generate_docx(

@@ -21,7 +21,8 @@ def build_server(root: Path) -> MCPServer:
     @server.tool(
         description=(
             "Read one UTF-8 text file beneath the configured filesystem root. "
-            "The path must be relative."
+            "The path must be relative. Do not use this for .docx files; use "
+            "read_docx instead."
         ),
         annotations=ToolAnnotations(
             read_only_hint=True,
@@ -53,6 +54,26 @@ def build_server(root: Path) -> MCPServer:
     def write_file(path: str, content: str) -> dict[str, str | int]:
         try:
             return filesystem.write_file(path, content)
+        except (FilesystemSandboxError, OSError) as exc:
+            raise ToolError(str(exc)) from exc
+
+    @server.tool(
+        description=(
+            "Read and verify the visible paragraphs of an existing Word .docx "
+            "beneath the configured filesystem root. Use this after "
+            "generate_docx instead of treating the Word file as UTF-8 text."
+        ),
+        annotations=ToolAnnotations(
+            read_only_hint=True,
+            destructive_hint=False,
+            idempotent_hint=True,
+            open_world_hint=False,
+        ),
+        structured_output=True,
+    )
+    def read_docx(path: str) -> dict[str, str | int | list[str]]:
+        try:
+            return filesystem.read_docx(path)
         except (FilesystemSandboxError, OSError) as exc:
             raise ToolError(str(exc)) from exc
 

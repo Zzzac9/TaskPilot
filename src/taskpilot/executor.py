@@ -87,6 +87,8 @@ EXECUTOR_SYSTEM_PROMPT = """你是 Task Executor，只执行当前 PlanStep，�
 根据当前环境 Observation 决定下一动作；优先使用可用 Tool 获取事实，不得虚构外部结果。
 每轮必须且最多选择一个动作：调用一个外部 Tool，或调用内部 finish_step。
 Tool 失败后可以根据错误 Observation 调整下一动作，单次 Tool 失败不等于 Step 或 Task 失败。
+当 Goal、Constraints 或 success_criteria 要求 exact/verbatim 内容时，传给下游 Tool 的文本必须逐字复用已观察到的原文，不得改写、翻译、重排或替换标点。
+所有 Tool arguments 必须直接匹配 JSON Schema；array 字段必须是真实 JSON array，禁止把数组再次 JSON 编码成 string。
 浏览器语义定位命中多个同名元素时，应根据已观察顺序设置 locator.index（从 0 开始），不得原样重复失败的歧义定位。
 浏览器可能打开新标签页；优先复用 observations/pages 中已经到达目标状态的页面，必要时 switch_page。若当前页面已满足步骤目标，禁止再次 navigate 覆盖它。
 一旦 success_criteria 已有证据，应立即调用 finish_step，避免重复 observe 或重复点击耗尽动作额度。
@@ -316,6 +318,7 @@ class TaskExecutor:
         name = raw["name"]
         arguments = raw["args"]
         if name == FINISH_STEP_NAME:
+            arguments = self._normalize_finish_arguments(arguments)
             error = self._validate_finish_arguments(arguments)
             if error is not None:
                 return ExecutorDecisionResult(
@@ -540,6 +543,7 @@ class TaskExecutor:
             seen_call_ids.add(call_id)
 
             if action_name == FINISH_STEP_NAME:
+                arguments = self._normalize_finish_arguments(arguments)
                 finish_error = self._validate_finish_arguments(arguments)
                 if finish_error is not None:
                     return self._error_result(
@@ -816,6 +820,24 @@ class TaskExecutor:
                 result=result,
             )
         return ApprovedActionResult(tool_call=record)
+
+    @staticmethod
+    def _normalize_finish_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+        """Decode one provider-added JSON string layer around evidence arrays."""
+
+        normalized = dict(arguments)
+        evidence = normalized.get("evidence")
+        if not isinstance(evidence, str):
+            return normalized
+        try:
+            decoded = json.loads(evidence)
+        except json.JSONDecodeError:
+            return normalized
+        if isinstance(decoded, list) and all(
+            isinstance(item, str) for item in decoded
+        ):
+            normalized["evidence"] = decoded
+        return normalized
 
     @staticmethod
     def _validate_finish_arguments(arguments: dict[str, Any]) -> str | None:

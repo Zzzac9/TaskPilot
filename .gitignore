@@ -282,6 +282,7 @@ crawled_data/
 
 # TaskPilot Browser Tool 运行产物
 artifacts/browser/
+artifacts/phase13-real-llm/
 tests/.artifacts/
 tests/.tmp/
 .taskpilot/

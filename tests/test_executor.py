@@ -513,6 +513,51 @@ async def test_finish_step_requires_nonempty_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finish_step_decodes_one_json_string_layer_for_evidence() -> None:
+    response = tool_call(
+        FINISH_STEP_NAME,
+        {
+            "summary": "Done",
+            "evidence": '["First observation", "Second observation"]',
+            "output": {"verified": True},
+        },
+        "encoded-evidence-1",
+    )
+    executor = TaskExecutor(
+        registry=make_registry(LookupTool()),
+        model=cast(BaseChatModel, FakeFunctionCallingModel([response])),
+    )
+
+    result = await executor.execute(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        task_results={},
+        tool_calls=[],
+    )
+
+    assert result.outcome.claimed_complete is True
+    assert result.outcome.evidence == ["First observation", "Second observation"]
+    assert result.outcome.output == {"verified": True}
+
+    action_executor = TaskExecutor(
+        registry=make_registry(LookupTool()),
+        model=cast(BaseChatModel, FakeFunctionCallingModel([response])),
+    )
+    decision = await action_executor.decide_action(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        action_index=1,
+        task_results={},
+        tool_calls=[],
+    )
+    assert decision.action is not None
+    assert decision.action.arguments["evidence"] == [
+        "First observation",
+        "Second observation",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_finish_step_requires_structured_output_object() -> None:
     response = tool_call(
         FINISH_STEP_NAME,
