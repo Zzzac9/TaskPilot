@@ -558,6 +558,33 @@ async def test_finish_step_decodes_one_json_string_layer_for_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_finish_step_wraps_one_nonempty_evidence_string() -> None:
+    response = tool_call(
+        FINISH_STEP_NAME,
+        {
+            "summary": "Done",
+            "evidence": "Observed the exact browser status.",
+            "output": {"verified": True},
+        },
+        "plain-evidence-1",
+    )
+    executor = TaskExecutor(
+        registry=make_registry(LookupTool()),
+        model=cast(BaseChatModel, FakeFunctionCallingModel([response])),
+    )
+
+    result = await executor.execute(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        task_results={},
+        tool_calls=[],
+    )
+
+    assert result.outcome.claimed_complete is True
+    assert result.outcome.evidence == ["Observed the exact browser status."]
+
+
+@pytest.mark.asyncio
 async def test_finish_step_requires_structured_output_object() -> None:
     response = tool_call(
         FINISH_STEP_NAME,

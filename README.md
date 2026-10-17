@@ -304,6 +304,22 @@ Phase 13 内置的本地 Filesystem MCP 可通过 `--filesystem-root` 启用。�
 每次运行的 `state.json`、`trace.json`、Word 文件、独立 oracle 和汇总报告写入新的
 `artifacts/phase13-real-llm/<UTC timestamp>/`，不会把 Agent 的完成声明直接当成成功。
 
+同时覆盖自然语言 Word 生成和生产 Graph Vision/HITL 的真实集成验证：
+
+```powershell
+$env:LLM_MODEL = "deepseek-flash"
+$env:VISION_API_KEY = $env:LLM_API_KEY
+$env:VISION_BASE_URL = $env:LLM_BASE_URL
+$env:VISION_MODEL = "deepseek-flash"
+.\.venv-benchmark\Scripts\python.exe -m benchmarks.real_agent_integration `
+  --task all --timeout-seconds 300
+```
+
+Vision 任务到达真实 LangGraph interrupt 后会显示风险、原因和冻结参数；操作者必须在
+终端输入 `APPROVE` 才会恢复同一个 Browser runtime。Runner 不注入 Tool Calls，也不直接
+构造 ApprovalRecord。Word 由独立 OOXML Oracle 验证，Vision click 由独立 fixture server
+side effect 验证。结果写入 `artifacts/real-agent-integration/<UTC timestamp>/`。
+
 Browser Tool 只接受 HTTP(S) 导航，操作优先使用 role、label、test id 等语义
 Locator；CSS 仅作 fallback，不提供任意 JavaScript 执行工具。下载与截图只能写入
 配置的受控目录。`browser_press` 可在严格语义 Locator 上发送单个 Playwright 按键（如

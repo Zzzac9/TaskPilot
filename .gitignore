@@ -284,6 +284,7 @@ crawled_data/
 artifacts/browser/
 artifacts/phase13-real-llm/
 artifacts/phase11-real-vision/
+artifacts/real-agent-integration/
 tests/.artifacts/
 tests/.tmp/
 .taskpilot/

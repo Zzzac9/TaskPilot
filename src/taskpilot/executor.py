@@ -823,7 +823,7 @@ class TaskExecutor:
 
     @staticmethod
     def _normalize_finish_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-        """Decode one provider-added JSON string layer around evidence arrays."""
+        """Normalize provider-added string layers around finish evidence."""
 
         normalized = dict(arguments)
         evidence = normalized.get("evidence")
@@ -832,11 +832,15 @@ class TaskExecutor:
         try:
             decoded = json.loads(evidence)
         except json.JSONDecodeError:
+            if evidence.strip():
+                normalized["evidence"] = [evidence.strip()]
             return normalized
         if isinstance(decoded, list) and all(
             isinstance(item, str) for item in decoded
         ):
             normalized["evidence"] = decoded
+        elif isinstance(decoded, str) and decoded.strip():
+            normalized["evidence"] = [decoded.strip()]
         return normalized
 
     @staticmethod

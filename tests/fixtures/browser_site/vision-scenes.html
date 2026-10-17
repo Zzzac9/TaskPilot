@@ -82,6 +82,18 @@
       status.textContent = inside
         ? `Clicked: ${target.label}`
         : `Missed at ${Math.round(x)},${Math.round(y)}`;
+      if (inside && new URLSearchParams(location.search).get("report") === "1") {
+        fetch("/events/vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scene: sceneName,
+            label: target.label,
+            x: Math.round(x),
+            y: Math.round(y)
+          })
+        });
+      }
     });
 
     // Test-only oracle. The Browser Tool and Vision model never receive this object.

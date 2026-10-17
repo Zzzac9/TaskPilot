@@ -107,6 +107,28 @@ $env:VISION_BASE_URL = "https://api.deepseek.com"
 零 Vision 调用、HIGH + require_approval、结构化目标、坐标落入 oracle 矩形、Vision
 interaction mode 和页面点击状态改变。
 
+## Production Graph Agent integration
+
+以下命令不使用 scripted model、预编排 Tool Calls 或伪造审批记录。真实 Analyzer、
+Planner、Executor、Verifier 和 Finalizer 通过生产 LangGraph 执行两个自然语言任务：
+
+1. Browser 读取网页，再由 Filesystem MCP 生成 Word；外部解析 OOXML 内容和来源。
+2. Agent 自主选择 Canvas 目标的 `browser_click`，Graph 在 Vision fallback 前真实中断；
+   操作者检查冻结动作并输入 `APPROVE`，随后外部 fixture server 验证实际点击。
+
+```powershell
+$env:LLM_MODEL = "deepseek-flash"
+$env:VISION_API_KEY = $env:LLM_API_KEY
+$env:VISION_BASE_URL = $env:LLM_BASE_URL
+$env:VISION_MODEL = "deepseek-flash"
+.\.venv-benchmark\Scripts\python.exe -m benchmarks.real_agent_integration `
+  --task all --timeout-seconds 300
+```
+
+失败诊断时可使用 `--task word` 或 `--task vision`，但最终报告应以 `--task all` 为准。
+2026-10-17 的最终统一运行结果为 2/2、False Completion 0；原始结果位于忽略目录
+`artifacts/real-agent-integration/20261017T082051Z/`。
+
 ## Final Phase 12 status
 
 Real LLM smoke pipeline 已通过基础设施 gate；Primary、No-Replan、stability attempts 2/3
@@ -116,6 +138,7 @@ Real LLM smoke pipeline 已通过基础设施 gate；Primary、No-Replan、stabi
 benchmarks/results/20260902T043156Z-1da399b-evaluation/evaluation-summary.json
 ```
 
-Primary 为 8/30，False Completion 为 11/30。真实 external Vision-model ablation =
-`NOT_RUN`；没有把 deterministic Vision targeter 或 pytest 结果计入 Primary Task Success
-Rate，也没有声称 token reduction。
+Primary 为 8/30，False Completion 为 11/30。当时的 Phase 12 source run 中 external
+Vision-model ablation 为 `NOT_RUN`；后续独立的 Phase 11 Vision 和生产 Graph 集成验收不
+回填或改写这组历史 Primary 指标。没有把 deterministic Vision targeter 或 pytest 结果
+计入 Primary Task Success Rate，也没有声称 token reduction。

@@ -164,7 +164,13 @@ class BrowserTools:
             ),
             BrowserTool(
                 "browser_click",
-                f"Click one strict semantic locator. {_LOCATOR_PRIORITY}",
+                (
+                    "Click one strict semantic locator. If a requested control is "
+                    "visibly rendered in Canvas or other non-DOM content, still "
+                    "provide its intended semantic role/name; the Host may use its "
+                    "configured Vision fallback and require approval. "
+                    f"{_LOCATOR_PRIORITY}"
+                ),
                 _object_schema(
                     {
                         "locator": locator,
@@ -273,7 +279,11 @@ class BrowserTools:
             ),
             BrowserTool(
                 "browser_screenshot",
-                "Save a system-named PNG in the controlled artifact directory; no Vision call.",
+                (
+                    "Save a system-named PNG in the controlled artifact directory "
+                    "for diagnostics. This returns only a path, does not show the "
+                    "image to the text Agent, and does not invoke Vision."
+                ),
                 _object_schema(
                     {
                         "page_id": page_id,
