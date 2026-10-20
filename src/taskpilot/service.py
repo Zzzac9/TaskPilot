@@ -163,6 +163,9 @@ def create_initial_state(
         "duplicate_observation_corrections": 0,
         "pending_executor_action": None,
         "recovery_issue": None,
+        "pending_human_assistance": None,
+        "human_assistance_count": 0,
+        "human_assistance_verification_required": False,
         "pending_replan": None,
         "plan_revision": 0,
         "replan_count": 0,
@@ -190,6 +193,7 @@ class TaskPilotService:
         browser_provider_factory: BrowserProviderFactory = _browser_provider_factory,
         max_step_attempts: int = 3,
         max_replans: int = 2,
+        max_human_assists: int = 2,
         graph_recursion_limit: int = 500,
         fault_injector: ExecutionFaultInjector | None = None,
     ) -> None:
@@ -206,6 +210,7 @@ class TaskPilotService:
         self.browser_provider_factory = browser_provider_factory
         self.max_step_attempts = max_step_attempts
         self.max_replans = max_replans
+        self.max_human_assists = max_human_assists
         self.graph_recursion_limit = graph_recursion_limit
         self.fault_injector = fault_injector
         # Page/BrowserContext 只在当前 Service lifespan 内按 task_id 隔离保存。
@@ -499,6 +504,7 @@ class TaskPilotService:
                 fault_injector=self.fault_injector,
                 replanner=components.replanner,
                 max_replans=self.max_replans,
+                max_human_assists=self.max_human_assists,
                 context_builder=context_builder,
                 trace_recorder=trace,
                 finalizer=(
@@ -573,7 +579,9 @@ class TaskPilotService:
                 started_at, started_name, step_id = started
                 error = payload.get("error")
                 interrupts = payload.get("interrupts") or []
-                status = "failed" if error else "interrupted" if interrupts else "success"
+                status = (
+                    "failed" if error else "interrupted" if interrupts else "success"
+                )
                 safe_error = None
                 if error:
                     safe_error = redact_sensitive_values(str(error))[:500]
@@ -646,7 +654,9 @@ class TaskPilotService:
 
     @staticmethod
     def _interrupt_targets_browser(interrupt: dict[str, Any]) -> bool:
-        return str(interrupt.get("tool_name") or "").startswith("browser_")
+        return bool(interrupt.get("requires_browser", False)) or str(
+            interrupt.get("tool_name") or ""
+        ).startswith("browser_")
 
     @staticmethod
     def _state_has_pending_browser_action(state: dict[str, Any]) -> bool:
@@ -688,14 +698,14 @@ class TaskPilotService:
             {"decision", "reason"}
             if interrupt_type == "tool_approval"
             else {"choice", "reason"}
-            if interrupt_type == "ambiguous_tool_recovery"
+            if interrupt_type in {"ambiguous_tool_recovery", "human_assistance"}
             else set()
         )
         required = (
             "decision"
             if interrupt_type == "tool_approval"
             else "choice"
-            if interrupt_type == "ambiguous_tool_recovery"
+            if interrupt_type in {"ambiguous_tool_recovery", "human_assistance"}
             else None
         )
         if required is None:

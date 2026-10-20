@@ -125,6 +125,18 @@ Planner → Executor → Verifier
 - Browser + Filesystem MCP registration in the shared `ToolRegistry`
 - Real Browser → MCP → Word full-Graph test with independent OOXML content checks
 
+### Human Assistance
+
+- Replanner structured decisions: `REPLAN`, `REQUEST_HUMAN`, or `ABORT`
+- Runtime-only blocker classification for login, CAPTCHA, and permission failures;
+  transient network/tool failures keep the existing retry path
+- Durable, bounded `human_assistance` interrupt with explicit required action and
+  resume condition
+- Assistance completion is not Tool approval: Browser tasks must successfully run a
+  fresh `browser_observe` before continuing, and all later actions still cross Policy
+- Verified `StepResult` history is preserved; replanning and assistance have independent
+  bounded counters
+
 生产 `TaskExecutor` 当前状态图为：
 
 ```text
@@ -137,6 +149,12 @@ START → initialize_task → analyze_task → plan_task → begin_step → deci
        │    └ approve → execute_tool_action
        └ allow → execute_tool_action
                     ├ terminal/replay-safe → decide_action
+                    ├ login/CAPTCHA/permission blocker → replan_task
+                    │    ├ REPLAN → begin_step
+                    │    ├ REQUEST_HUMAN → human_assistance [interrupt]
+                    │    │    ├ cancel → END
+                    │    │    └ completed → re-observe/verify → decide_action
+                    │    └ ABORT → END
                     └ ambiguous unsafe → recovery_review [interrupt]
                          ├ retry → execute_tool_action
                          └ abort → END
@@ -405,11 +423,11 @@ Action Journal 与 Trace，而不是把 Trace 假设为天然 exactly-once。
 
 当前只支持每个 `task_id` 一个 active runner，不包含 distributed lock、lease 或多
 worker 协调。同一 Service/App 生命周期中，browser-enabled task 若停在 interrupt，
-会按 task_id 独占保留原 BrowserSession，approve/reject 后继续使用该 live environment，
+会按 task_id 独占保留原 BrowserSession，审批、恢复审查或 Human Assistance 后继续使用该 live environment，
 并在任务终态或 app shutdown 时关闭。Service 重启后不会恢复旧 Page、popup、DOM、
 滚动位置或表单瞬态；若 durable State 正等待 browser action approval、但 live runtime
 已不存在，resume 会返回 conflict 并 fail closed，绝不会在新建的 about:blank Page 上
-执行旧 frozen click。当前也尚未完整解决网页 Prompt Injection；Risk Policy 只保护
+执行旧 frozen click 或相信“人工操作已完成”。当前也尚未完整解决网页 Prompt Injection；Risk Policy 只保护
 Tool execution boundary。
 
 ## 薄 FastAPI 接口（仅本地开发）
@@ -430,7 +448,8 @@ uvicorn --factory taskpilot.api.app:create_app --host 127.0.0.1 --port 8000
 - `GET /tasks/{task_id}`：checkpoint-only 读取 durable snapshot（包含已生成的
   `final_answer`）；不连接 MCP、不启动
   Browser、不构造 Host LLM components，也不继续执行 Graph。
-- `POST /tasks/{task_id}/resume`：只接受匹配当前 interrupt 的审批决定或 recovery 选择。
+- `POST /tasks/{task_id}/resume`：只接受匹配当前 interrupt 的审批决定、recovery 选择或
+  Human Assistance 的 `completed` / `cancel`；三者 schema 和授权语义彼此独立。
 - `GET /tasks/{task_id}/trace-summary`：先用同一 checkpoint-only 路径确认任务存在，再只
   打开 SQLite Trace recorder 返回聚合。
 

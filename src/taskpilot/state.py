@@ -4,6 +4,7 @@ from typing import Any, TypedDict
 
 from taskpilot.models import (
     ExecutorAction,
+    HumanAssistanceRequest,
     PlanStep,
     ReplanRecord,
     ReplanRequest,
@@ -52,6 +53,10 @@ class TaskState(TypedDict):
     pending_executor_action: ExecutorAction | None
     # STARTED 且不可安全重放时保存给人工恢复审查的问题。
     recovery_issue: RecoveryIssue | None
+    # Human Assistance 不授予任何 Tool 权限；恢复后必须先做环境验证。
+    pending_human_assistance: HumanAssistanceRequest | None
+    human_assistance_count: int
+    human_assistance_verification_required: bool
     # Replan 控制事实属于 durable State；模型 Context 与 Trace 均不放在这里。
     pending_replan: ReplanRequest | None
     plan_revision: int
@@ -86,6 +91,9 @@ class TaskStateUpdate(TypedDict, total=False):
     duplicate_observation_corrections: int
     pending_executor_action: ExecutorAction | None
     recovery_issue: RecoveryIssue | None
+    pending_human_assistance: HumanAssistanceRequest | None
+    human_assistance_count: int
+    human_assistance_verification_required: bool
     pending_replan: ReplanRequest | None
     plan_revision: int
     replan_count: int

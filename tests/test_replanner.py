@@ -1,16 +1,25 @@
 """Phase 10 Replanner prompt 与 deterministic validation 测试。"""
 
-import pytest
+from unittest.mock import MagicMock
 
+import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+
+from taskpilot.context import ContextSnapshot
 from taskpilot.models import (
     PlanStep,
     PlanStepStatus,
     ReplanProposal,
+    ReplanDecision,
     ReplanRecord,
     ReplanRequest,
     ReplanTrigger,
 )
-from taskpilot.replanner import REPLANNER_SYSTEM_PROMPT, validate_replan_proposal
+from taskpilot.replanner import (
+    REPLANNER_SYSTEM_PROMPT,
+    TaskReplanner,
+    validate_replan_proposal,
+)
 
 
 def historical(status: PlanStepStatus = PlanStepStatus.COMPLETED) -> list[PlanStep]:
@@ -39,8 +48,51 @@ def new_step(step_id: int = 2, **updates: object) -> PlanStep:
 
 
 def test_replanner_prompt_enforces_plan_only_boundary() -> None:
-    for phrase in ["WHAT", "不得选择或调用 Tool", "Constraints 不允许修改", "不得虚构"]:
+    for phrase in [
+        "WHAT",
+        "不得选择或调用 Tool",
+        "Constraints 不允许修改",
+        "不得虚构",
+        "REQUEST_HUMAN",
+        "ABORT",
+    ]:
         assert phrase in REPLANNER_SYSTEM_PROMPT
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [ReplanDecision.REPLAN, ReplanDecision.REQUEST_HUMAN, ReplanDecision.ABORT],
+)
+def test_deterministic_fake_llm_covers_all_replanner_decisions(
+    decision: ReplanDecision,
+) -> None:
+    expected = ReplanProposal(
+        decision=decision,
+        reason="fixture",
+        steps=[new_step()] if decision is ReplanDecision.REPLAN else [],
+        required_human_action=(
+            "sign in" if decision is ReplanDecision.REQUEST_HUMAN else None
+        ),
+        resume_condition=(
+            "authenticated page is observable"
+            if decision is ReplanDecision.REQUEST_HUMAN
+            else None
+        ),
+    )
+    structured = MagicMock()
+    structured.invoke.return_value = expected
+    model = MagicMock(spec=BaseChatModel)
+    model.with_structured_output.return_value = structured
+
+    actual = TaskReplanner(model).replan(
+        ContextSnapshot(content={"fixture": True}, total_chars=16)
+    )
+
+    assert actual == expected
+    model.with_structured_output.assert_called_once_with(
+        ReplanProposal,
+        method="function_calling",
+    )
 
 
 def test_valid_replan_accepts_completed_historical_dependency() -> None:

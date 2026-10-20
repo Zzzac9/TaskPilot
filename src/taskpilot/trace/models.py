@@ -25,6 +25,8 @@ class TraceEventType(str, Enum):
     POLICY_DECIDED = "policy_decided"
     APPROVAL_REQUESTED = "approval_requested"
     APPROVAL_RESOLVED = "approval_resolved"
+    HUMAN_ASSISTANCE_REQUESTED = "human_assistance_requested"
+    HUMAN_ASSISTANCE_RESOLVED = "human_assistance_resolved"
     TOOL_STARTED = "tool_started"
     TOOL_SUCCEEDED = "tool_succeeded"
     TOOL_FAILED = "tool_failed"

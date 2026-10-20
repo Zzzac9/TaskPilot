@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PlanStepStatus(str, Enum):
@@ -31,6 +31,7 @@ class TaskStatus(str, Enum):
     CREATED = "created"
     RUNNING = "running"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_HUMAN_ASSISTANCE = "waiting_human_assistance"
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
@@ -44,10 +45,34 @@ class ExecutorActionType(str, Enum):
 
 
 class ReplanTrigger(str, Enum):
-    """触发动态重规划的两种任务语义。"""
+    """触发动态重规划的任务语义。"""
 
     STEP_ATTEMPTS_EXHAUSTED = "step_attempts_exhausted"
     TASK_VERIFICATION_FAILED = "task_verification_failed"
+    EXECUTOR_BLOCKED = "executor_blocked"
+
+
+class ReplanDecision(str, Enum):
+    """Replanner 只能建议；最终路由仍由 Runtime 校验。"""
+
+    REPLAN = "REPLAN"
+    REQUEST_HUMAN = "REQUEST_HUMAN"
+    ABORT = "ABORT"
+
+
+class ExecutionBlockerCategory(str, Enum):
+    """Runtime 可审计的不可自动恢复阻塞类别。"""
+
+    LOGIN_REQUIRED = "login_required"
+    CAPTCHA_REQUIRED = "captcha_required"
+    PERMISSION_DENIED = "permission_denied"
+
+
+class HumanAssistanceChoice(str, Enum):
+    """Human Assistance 与审批授权刻意使用不同词汇。"""
+
+    COMPLETED = "completed"
+    CANCEL = "cancel"
 
 
 class TaskSpec(BaseModel):
@@ -87,13 +112,49 @@ class ReplanRequest(BaseModel):
     reason: str
     missing_requirements: list[str] = Field(default_factory=list)
     verification_feedback: str | None = None
+    blocking_failure: "ExecutionBlocker | None" = None
 
 
 class ReplanProposal(BaseModel):
-    """Replanner 只提出后续语义步骤，不复制历史计划。"""
+    """Replanner 的结构化建议；Runtime 决定是否接受以及如何路由。"""
 
+    decision: ReplanDecision = ReplanDecision.REPLAN
     reason: str
-    steps: list[PlanStep]
+    steps: list[PlanStep] = Field(default_factory=list)
+    required_human_action: str | None = None
+    resume_condition: str | None = None
+
+
+class ExecutionBlocker(BaseModel):
+    """Executor Tool 失败后由 Runtime 分类出的结构化阻塞事实。"""
+
+    category: ExecutionBlockerCategory
+    step_id: int
+    call_id: str
+    tool_name: str
+    reason: str
+    retryable: bool = False
+    requires_browser: bool = False
+
+
+class HumanAssistanceRequest(BaseModel):
+    """已通过 Runtime 校验、可进入 durable interrupt 的协助请求。"""
+
+    request_id: str
+    step_id: int
+    reason: str
+    required_action: str
+    resume_condition: str
+    blocker: ExecutionBlocker
+
+
+class HumanAssistanceResponse(BaseModel):
+    """严格限制 resume value，绝不承载审批或冻结动作修改。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    choice: HumanAssistanceChoice
+    reason: str | None = None
 
 
 class ReplanRecord(BaseModel):
@@ -102,6 +163,7 @@ class ReplanRecord(BaseModel):
     revision: int
     trigger: ReplanTrigger
     reason: str
+    decision: ReplanDecision = ReplanDecision.REPLAN
     replaced_step_ids: list[int] = Field(default_factory=list)
     new_step_ids: list[int] = Field(default_factory=list)
 

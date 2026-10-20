@@ -28,8 +28,14 @@ class RecoveryResumeRequest(StrictSchema):
     reason: str | None = None
 
 
+class HumanAssistanceResumeRequest(StrictSchema):
+    type: Literal["human_assistance"]
+    choice: Literal["completed", "cancel"]
+    reason: str | None = None
+
+
 ResumeTaskRequest = Annotated[
-    ToolApprovalResumeRequest | RecoveryResumeRequest,
+    ToolApprovalResumeRequest | RecoveryResumeRequest | HumanAssistanceResumeRequest,
     Field(discriminator="type"),
 ]
 
@@ -49,6 +55,9 @@ class InterruptView(StrictSchema):
     reason: str | None = None
     arguments_preview: dict[str, Any] | None = None
     choices: list[str] | None = None
+    required_action: str | None = None
+    resume_condition: str | None = None
+    requires_browser: bool | None = None
 
 
 class TaskView(StrictSchema):
@@ -58,6 +67,7 @@ class TaskView(StrictSchema):
     current_step_id: int | None
     plan_revision: int
     replan_count: int
+    human_assistance_count: int
     plan: list[PlanStepView]
     interrupt: InterruptView | None
     final_answer: str | None

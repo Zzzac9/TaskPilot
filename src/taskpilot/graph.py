@@ -30,10 +30,16 @@ from taskpilot.finalizer import (
     render_failure_answer,
 )
 from taskpilot.models import (
+    ExecutionBlocker,
+    ExecutionBlockerCategory,
     ExecutorActionType,
+    HumanAssistanceChoice,
+    HumanAssistanceRequest,
+    HumanAssistanceResponse,
     PlanStep,
     PlanStepStatus,
     ReplanRecord,
+    ReplanDecision,
     ReplanRequest,
     ReplanTrigger,
     StepExecutionOutcome,
@@ -109,9 +115,7 @@ def analyze_task(
         error_detail = redact_sensitive_values(str(exc))
         return {
             "status": TaskStatus.FAILED,
-            "error": (
-                f"Task Analyzer 调用失败: {type(exc).__name__}: {error_detail}"
-            ),
+            "error": (f"Task Analyzer 调用失败: {type(exc).__name__}: {error_detail}"),
         }
     return {"task_spec": task_spec, "error": None}
 
@@ -142,9 +146,7 @@ def plan_task(
             "plan": [],
             "current_step_id": None,
             "status": TaskStatus.FAILED,
-            "error": (
-                f"Task Planner 调用失败: {type(exc).__name__}: {error_detail}"
-            ),
+            "error": (f"Task Planner 调用失败: {type(exc).__name__}: {error_detail}"),
         }
 
     if current_step_id is None:
@@ -160,6 +162,9 @@ def plan_task(
         "plan_revision": 0,
         "replan_count": 0,
         "replan_history": [],
+        "pending_human_assistance": None,
+        "human_assistance_count": 0,
+        "human_assistance_verification_required": False,
         "pending_replan": None,
         "status": TaskStatus.RUNNING,
         "error": None,
@@ -175,7 +180,9 @@ async def execute_step(
 
     current_step_id = state["current_step_id"]
     if current_step_id is None:
-        return _failed_update(state["error"] or "Executor 无法运行: current_step_id 缺失")
+        return _failed_update(
+            state["error"] or "Executor 无法运行: current_step_id 缺失"
+        )
     task_spec = state["task_spec"]
     if task_spec is None:
         return _failed_update(state["error"] or "Executor 无法运行: task_spec 缺失")
@@ -183,8 +190,7 @@ async def execute_step(
     step_index = _find_unique_step_index(state["plan"], current_step_id)
     if step_index is None:
         return _failed_update(
-            "Executor 无法定位唯一当前步骤: "
-            f"current_step_id={current_step_id}"
+            f"Executor 无法定位唯一当前步骤: current_step_id={current_step_id}"
         )
 
     current_step = state["plan"][step_index]
@@ -197,15 +203,11 @@ async def execute_step(
             f"{current_step.id}"
         )
 
-    running_step = current_step.model_copy(
-        update={"status": PlanStepStatus.RUNNING}
-    )
+    running_step = current_step.model_copy(update={"status": PlanStepStatus.RUNNING})
     updated_plan = list(state["plan"])
     updated_plan[step_index] = running_step
     prior_step_tool_calls = [
-        record
-        for record in state["tool_calls"]
-        if record.step_id == current_step_id
+        record for record in state["tool_calls"] if record.step_id == current_step_id
     ]
 
     try:
@@ -358,9 +360,7 @@ def verify_step(
 
     step_index = _find_unique_step_index(state["plan"], current_step_id)
     if step_index is None:
-        return _failed_update(
-            f"Step Verifier 无法定位唯一当前步骤: {current_step_id}"
-        )
+        return _failed_update(f"Step Verifier 无法定位唯一当前步骤: {current_step_id}")
     step = state["plan"][step_index]
     if outcome.step_id != step.id:
         return _failed_update(
@@ -372,9 +372,7 @@ def verify_step(
         record for record in state["tool_calls"] if record.step_id == step.id
     ]
     dependency_results = [
-        result
-        for result in state["step_results"]
-        if result.step_id in step.depends_on
+        result for result in state["step_results"] if result.step_id in step.depends_on
     ]
     try:
         if outcome.claimed_complete:
@@ -395,9 +393,7 @@ def verify_step(
         return {
             "plan": _replace_step(state["plan"], step_index, failed_step),
             "status": TaskStatus.FAILED,
-            "error": (
-                f"Step Verifier 调用失败: {type(exc).__name__}: {error_detail}"
-            ),
+            "error": (f"Step Verifier 调用失败: {type(exc).__name__}: {error_detail}"),
         }
 
     if result.verified:
@@ -413,9 +409,7 @@ def verify_step(
         update={
             "retry_count": retry_count,
             "status": (
-                PlanStepStatus.FAILED
-                if reached_limit
-                else PlanStepStatus.RUNNING
+                PlanStepStatus.FAILED if reached_limit else PlanStepStatus.RUNNING
             ),
         }
     )
@@ -458,9 +452,7 @@ def verify_step(
                 update["error"] = f"{reason}; hard action limit, replan disabled"
             else:
                 update["error"] = (
-                    reason
-                    if max_replans == 0
-                    else f"{reason}; replan budget exhausted"
+                    reason if max_replans == 0 else f"{reason}; replan budget exhausted"
                 )
     return update
 
@@ -485,9 +477,7 @@ def advance_step(state: TaskState) -> TaskStateUpdate:
 
     step_index = _find_unique_step_index(state["plan"], current_step_id)
     if step_index is None:
-        return _failed_update(
-            f"advance_step 无法定位唯一当前步骤: {current_step_id}"
-        )
+        return _failed_update(f"advance_step 无法定位唯一当前步骤: {current_step_id}")
     completed_step = state["plan"][step_index].model_copy(
         update={"status": PlanStepStatus.COMPLETED}
     )
@@ -565,9 +555,7 @@ def verify_task(
         error_detail = redact_sensitive_values(str(exc))
         return {
             "status": TaskStatus.FAILED,
-            "error": (
-                f"Task Verifier 调用失败: {type(exc).__name__}: {error_detail}"
-            ),
+            "error": (f"Task Verifier 调用失败: {type(exc).__name__}: {error_detail}"),
         }
 
     if result.completed:
@@ -595,11 +583,7 @@ def verify_task(
         "verification": result,
         "current_step_id": None,
         "status": TaskStatus.FAILED,
-        "error": (
-            reason
-            if max_replans == 0
-            else f"{reason}; replan budget exhausted"
-        ),
+        "error": (reason if max_replans == 0 else f"{reason}; replan budget exhausted"),
     }
 
 
@@ -759,6 +743,7 @@ async def replan_task(
     replanner: TaskReplannerLike,
     context_builder: ContextBuilder,
     max_replans: int,
+    max_human_assists: int,
     trace_recorder: TraceRecorderLike,
 ) -> TaskStateUpdate:
     """验证并接受一版只覆盖剩余工作的全新 revision。"""
@@ -791,6 +776,120 @@ async def replan_task(
         )
         proposal = await asyncio.to_thread(replanner.replan, snapshot)
         validate_replan_proposal(proposal, state["plan"])
+        next_replan_count = state.get("replan_count", 0) + 1
+        if proposal.decision is ReplanDecision.ABORT:
+            record = ReplanRecord(
+                revision=state.get("plan_revision", 0),
+                trigger=request.trigger,
+                reason=proposal.reason,
+                decision=proposal.decision,
+            )
+            error = f"Task Replanner requested abort: {proposal.reason}"
+            await _trace(
+                trace_recorder,
+                state,
+                TraceEventType.PLAN_REPLANNED,
+                status="aborted",
+                latency_ms=(perf_counter() - started) * 1000,
+                payload={"trigger": request.trigger.value, "reason": proposal.reason},
+            )
+            await _trace(
+                trace_recorder,
+                state,
+                TraceEventType.TASK_FAILED,
+                status=TaskStatus.FAILED.value,
+                payload={"error": error},
+            )
+            return {
+                "replan_count": next_replan_count,
+                "replan_history": state.get("replan_history", []) + [record],
+                "pending_replan": None,
+                "status": TaskStatus.FAILED,
+                "error": error,
+            }
+        if proposal.decision is ReplanDecision.REQUEST_HUMAN:
+            blocker = request.blocking_failure
+            if request.trigger is not ReplanTrigger.EXECUTOR_BLOCKED or blocker is None:
+                raise ValueError(
+                    "REQUEST_HUMAN 只允许用于 Runtime 确认的 Executor blocker"
+                )
+            if blocker.retryable:
+                raise ValueError("retryable failure 不得请求 Human Assistance")
+            if state.get("human_assistance_count", 0) >= max_human_assists:
+                raise ValueError("human assistance budget exhausted")
+            if any(
+                state.get(name) is not None
+                for name in (
+                    "pending_action",
+                    "pending_executor_action",
+                    "recovery_issue",
+                )
+            ):
+                raise ValueError(
+                    "存在 frozen action/approval/recovery 时不得请求 Human Assistance"
+                )
+            latest = state["tool_calls"][-1] if state["tool_calls"] else None
+            if (
+                latest is None
+                or latest.status is not ToolCallStatus.FAILED
+                or latest.step_id != blocker.step_id
+                or latest.call_id != blocker.call_id
+                or latest.tool_name != blocker.tool_name
+            ):
+                raise ValueError("blocking_failure 与最新失败 ToolCall 不一致")
+            request_id = (
+                f"{state['task_id']}:{blocker.step_id}:"
+                f"{state.get('human_assistance_count', 0) + 1}"
+            )
+            assistance = HumanAssistanceRequest(
+                request_id=request_id,
+                step_id=blocker.step_id,
+                reason=proposal.reason,
+                required_action=proposal.required_human_action or "",
+                resume_condition=proposal.resume_condition or "",
+                blocker=blocker,
+            )
+            record = ReplanRecord(
+                revision=state.get("plan_revision", 0),
+                trigger=request.trigger,
+                reason=proposal.reason,
+                decision=proposal.decision,
+            )
+            await _trace(
+                trace_recorder,
+                state,
+                TraceEventType.PLAN_REPLANNED,
+                status="request_human",
+                latency_ms=(perf_counter() - started) * 1000,
+                payload={
+                    "trigger": request.trigger.value,
+                    "reason": proposal.reason,
+                    "blocking_category": blocker.category.value,
+                },
+            )
+            await _trace(
+                trace_recorder,
+                state,
+                TraceEventType.HUMAN_ASSISTANCE_REQUESTED,
+                step_id=blocker.step_id,
+                call_id=blocker.call_id,
+                status=TaskStatus.WAITING_HUMAN_ASSISTANCE.value,
+                payload={
+                    "request_id": request_id,
+                    "reason": proposal.reason,
+                    "requires_browser": blocker.requires_browser,
+                },
+            )
+            return {
+                "replan_count": next_replan_count,
+                "replan_history": state.get("replan_history", []) + [record],
+                "human_assistance_count": state.get("human_assistance_count", 0) + 1,
+                "pending_human_assistance": assistance,
+                "human_assistance_verification_required": False,
+                "pending_replan": None,
+                "status": TaskStatus.WAITING_HUMAN_ASSISTANCE,
+                "error": None,
+            }
         next_revision = state.get("plan_revision", 0) + 1
         new_steps = [
             step.model_copy(
@@ -847,6 +946,7 @@ async def replan_task(
         revision=next_revision,
         trigger=request.trigger,
         reason=proposal.reason,
+        decision=proposal.decision,
         replaced_step_ids=replaced_ids,
         new_step_ids=[step.id for step in new_steps],
     )
@@ -870,7 +970,7 @@ async def replan_task(
     return {
         "plan": updated_plan,
         "plan_revision": next_revision,
-        "replan_count": state.get("replan_count", 0) + 1,
+        "replan_count": next_replan_count,
         "replan_history": state.get("replan_history", []) + [record],
         "current_step_id": next_step_id,
         "current_action_index": 0,
@@ -879,10 +979,80 @@ async def replan_task(
         "pending_executor_action": None,
         "pending_action": None,
         "recovery_issue": None,
+        "pending_human_assistance": None,
+        "human_assistance_verification_required": False,
         "pending_replan": None,
         "status": TaskStatus.RUNNING,
         "error": None,
     }
+
+
+def human_assistance(state: TaskState) -> TaskStateUpdate:
+    """独立的协助 interrupt；completed 仅表示可以开始复查。"""
+
+    request = state.get("pending_human_assistance")
+    if request is None:
+        return _failed_update("human_assistance 需要 pending_human_assistance")
+    payload = {
+        "type": "human_assistance",
+        "request_id": request.request_id,
+        "step_id": request.step_id,
+        "reason": request.reason,
+        "required_action": request.required_action,
+        "resume_condition": request.resume_condition,
+        "requires_browser": request.blocker.requires_browser,
+        "choices": [
+            HumanAssistanceChoice.COMPLETED.value,
+            HumanAssistanceChoice.CANCEL.value,
+        ],
+    }
+    resume_value = interrupt(payload)
+    try:
+        response = HumanAssistanceResponse.model_validate(resume_value)
+    except ValidationError as exc:
+        return _failed_update(f"Human Assistance resume value 无效: {exc}")
+    if response.choice is HumanAssistanceChoice.CANCEL:
+        return {
+            "pending_human_assistance": None,
+            "human_assistance_verification_required": False,
+            "status": TaskStatus.FAILED,
+            "error": response.reason or "Human Assistance canceled by user",
+        }
+    return {
+        # 保留 request 直到一次受控环境验证成功，不能只信用户声明。
+        "human_assistance_verification_required": True,
+        "executor_feedback": (
+            "用户表示已完成人工协助。必须先重新观察并验证恢复条件；"
+            "这不是任何高风险 Tool 的审批。"
+        ),
+        "status": TaskStatus.RUNNING,
+        "error": None,
+    }
+
+
+async def human_assistance_traced(
+    state: TaskState, *, trace_recorder: TraceRecorderLike
+) -> TaskStateUpdate:
+    update = human_assistance(state)
+    request = state.get("pending_human_assistance")
+    if request is not None:
+        await _trace(
+            trace_recorder,
+            state,
+            TraceEventType.HUMAN_ASSISTANCE_RESOLVED,
+            step_id=request.step_id,
+            call_id=request.blocker.call_id,
+            status=(
+                "canceled"
+                if update.get("status") is TaskStatus.FAILED
+                else "verification_required"
+            ),
+            payload={
+                "request_id": request.request_id,
+                "error": update.get("error"),
+            },
+        )
+    return update
 
 
 def find_next_executable_step(plan: Sequence[PlanStep]) -> int | None:
@@ -891,9 +1061,7 @@ def find_next_executable_step(plan: Sequence[PlanStep]) -> int | None:
     completed_ids = {
         step.id for step in plan if step.status == PlanStepStatus.COMPLETED
     }
-    pending_steps = [
-        step for step in plan if step.status == PlanStepStatus.PENDING
-    ]
+    pending_steps = [step for step in plan if step.status == PlanStepStatus.PENDING]
     for step in pending_steps:
         if all(dependency_id in completed_ids for dependency_id in step.depends_on):
             return step.id
@@ -929,9 +1097,7 @@ def _execution_state_update(
         ),
         "step_outcome": execution.outcome,
         "pending_action": execution.pending_action,
-        "status": (
-            TaskStatus.FAILED if execution.fatal_error else TaskStatus.RUNNING
-        ),
+        "status": (TaskStatus.FAILED if execution.fatal_error else TaskStatus.RUNNING),
         "error": (
             execution.outcome.error
             if execution.fatal_error and execution.outcome is not None
@@ -1089,9 +1255,7 @@ def _build_legacy_graph(
     active_analyzer = analyzer if analyzer is not None else TaskAnalyzer()
     active_planner = planner if planner is not None else TaskPlanner()
     active_executor = (
-        executor
-        if executor is not None
-        else TaskExecutor(registry=ToolRegistry())
+        executor if executor is not None else TaskExecutor(registry=ToolRegistry())
     )
     active_verifier = verifier if verifier is not None else TaskVerifier()
 
@@ -1250,8 +1414,8 @@ async def decide_action(
         step_results=state["step_results"],
         verification_feedback=state.get("step_verification"),
         policy_decisions=state.get("policy_decisions", []),
-            approval_records=state.get("approval_records", []),
-            executor_feedback=state.get("executor_feedback"),
+        approval_records=state.get("approval_records", []),
+        executor_feedback=state.get("executor_feedback"),
     )
     latency = (perf_counter() - started) * 1000
     if result.context_snapshot is not None:
@@ -1318,7 +1482,9 @@ async def decide_action(
             state,
             TraceEventType.EXECUTOR_CORRECTED,
             step_id=step_id,
-            status="retry" if corrections <= MAX_DUPLICATE_OBSERVATION_CORRECTIONS else "exhausted",
+            status="retry"
+            if corrections <= MAX_DUPLICATE_OBSERVATION_CORRECTIONS
+            else "exhausted",
             payload={
                 "reason": result.correction_feedback,
                 "correction": corrections,
@@ -1377,6 +1543,35 @@ async def decide_action(
     action = result.action
     if action.step_id != step_id or action.action_index != action_index:
         return _failed_update("ExecutorAction identity 与 Graph 当前边界不一致")
+    if state.get("human_assistance_verification_required", False):
+        assistance = state.get("pending_human_assistance")
+        if assistance is None:
+            return _failed_update("Human Assistance verification 缺少 durable request")
+        valid_verification = action.action_type is ExecutorActionType.TOOL
+        if valid_verification and assistance.blocker.requires_browser:
+            valid_verification = action.tool_name == "browser_observe"
+        elif valid_verification:
+            try:
+                valid_verification = executor.is_replay_safe(action)
+            except Exception:
+                valid_verification = False
+        if not valid_verification:
+            required = (
+                "browser_observe"
+                if assistance.blocker.requires_browser
+                else "一个 replay-safe 只读观察 Tool"
+            )
+            return {
+                "current_action_index": action_index,
+                "pending_executor_action": None,
+                "pending_action": None,
+                "executor_feedback": (
+                    f"Human Assistance 恢复后必须先执行 {required} 验证环境；"
+                    "不能 finish_step，也不能把用户声明当作审批或成功证据。"
+                ),
+                "status": TaskStatus.RUNNING,
+                "error": None,
+            }
     return {
         "current_action_index": action_index,
         "pending_executor_action": action,
@@ -1427,8 +1622,7 @@ async def assess_policy(
         if not is_vision_fallback_eligible(exc):
             detail = redact_sensitive_values(str(exc))
             return _failed_update(
-                "Tool Risk Policy 评估失败，动作未执行: "
-                f"{type(exc).__name__}: {detail}"
+                f"Tool Risk Policy 评估失败，动作未执行: {type(exc).__name__}: {detail}"
             )
         detail = redact_sensitive_values(str(exc))
         preview = redact_preview(action.arguments)
@@ -1579,15 +1773,28 @@ def _journal_identity_error(
     index = _find_unique_step_index(state["plan"], action.step_id)
     assert index is not None
     expected = (
-        state["task_id"], action.step_id, state["plan"][index].retry_count,
-        action.action_index, action.call_id, action.tool_name, arguments_hash,
+        state["task_id"],
+        action.step_id,
+        state["plan"][index].retry_count,
+        action.action_index,
+        action.call_id,
+        action.tool_name,
+        arguments_hash,
         replay_safe,
     )
     actual = (
-        record.task_id, record.step_id, record.retry_count, record.action_index,
-        record.call_id, record.tool_name, record.arguments_hash, record.replay_safe,
+        record.task_id,
+        record.step_id,
+        record.retry_count,
+        record.action_index,
+        record.call_id,
+        record.tool_name,
+        record.arguments_hash,
+        record.replay_safe,
     )
-    return None if actual == expected else "Action Journal identity/hash 不一致，拒绝恢复"
+    return (
+        None if actual == expected else "Action Journal identity/hash 不一致，拒绝恢复"
+    )
 
 
 def _materialize_tool_call(
@@ -1610,11 +1817,14 @@ def _materialize_tool_call(
         error=record.error,
     )
     existing = [
-        item for item in state["tool_calls"]
+        item
+        for item in state["tool_calls"]
         if item.step_id == tool_call.step_id and item.call_id == tool_call.call_id
     ]
     if existing:
-        if len(existing) != 1 or existing[0].model_dump(mode="json") != tool_call.model_dump(mode="json"):
+        if len(existing) != 1 or existing[0].model_dump(
+            mode="json"
+        ) != tool_call.model_dump(mode="json"):
             return _failed_update("ToolCallRecord identity 内容冲突，拒绝静默覆盖")
         updated_calls = state["tool_calls"]
     else:
@@ -1627,7 +1837,26 @@ def _materialize_tool_call(
         "status": TaskStatus.RUNNING,
         "error": None,
     }
-    if tool_call.tool_name == "browser_observe" and tool_call.status is ToolCallStatus.SUCCESS:
+    if (
+        state.get("human_assistance_verification_required", False)
+        and tool_call.status is ToolCallStatus.SUCCESS
+    ):
+        assistance = state.get("pending_human_assistance")
+        is_expected = assistance is not None and (
+            not assistance.blocker.requires_browser
+            or tool_call.tool_name == "browser_observe"
+        )
+        if is_expected:
+            update["pending_human_assistance"] = None
+            update["human_assistance_verification_required"] = False
+            update["executor_feedback"] = (
+                "Human Assistance 后的环境观察已成功；请根据新 observation 独立验证"
+                "前置条件并继续。任何高风险动作仍须经过 Policy Gate。"
+            )
+    if (
+        tool_call.tool_name == "browser_observe"
+        and tool_call.status is ToolCallStatus.SUCCESS
+    ):
         streak, page, fingerprint = repeated_observation_streak(
             updated_calls,
             step_id=tool_call.step_id or action.step_id,
@@ -1640,7 +1869,84 @@ def _materialize_tool_call(
                 f"{fingerprint[:12] if fingerprint else 'unknown'}。"
                 "优先复用已有 observation；满足成功条件时直接 finish_step。"
             )
+    if tool_call.status is ToolCallStatus.FAILED and tool_call.error:
+        blocker = classify_execution_blocker(tool_call)
+        if blocker is not None:
+            update["pending_replan"] = ReplanRequest(
+                trigger=ReplanTrigger.EXECUTOR_BLOCKED,
+                failed_step_id=tool_call.step_id,
+                reason=blocker.reason,
+                blocking_failure=blocker,
+            )
     return update
+
+
+def classify_execution_blocker(record: ToolCallRecord) -> ExecutionBlocker | None:
+    """只识别明确的人机阻塞；超时和暂时性故障继续走现有重试。"""
+
+    if record.status is not ToolCallStatus.FAILED or not record.error:
+        return None
+    text = record.error.casefold()
+    transient_markers = (
+        "timeout",
+        "timed out",
+        "temporarily unavailable",
+        "temporary failure",
+        "connection reset",
+        "network",
+        "超时",
+        "暂时",
+        "网络",
+    )
+    if any(marker in text for marker in transient_markers):
+        return None
+    categories = (
+        (
+            ExecutionBlockerCategory.CAPTCHA_REQUIRED,
+            ("captcha", "recaptcha", "hcaptcha", "验证码", "人机验证"),
+        ),
+        (
+            ExecutionBlockerCategory.LOGIN_REQUIRED,
+            (
+                "login required",
+                "sign in required",
+                "authentication required",
+                "not authenticated",
+                "需要登录",
+                "请登录",
+            ),
+        ),
+        (
+            ExecutionBlockerCategory.PERMISSION_DENIED,
+            (
+                "permission denied",
+                "access denied",
+                "forbidden",
+                "insufficient permission",
+                "权限不足",
+                "无权访问",
+            ),
+        ),
+    )
+    category = next(
+        (
+            candidate
+            for candidate, markers in categories
+            if any(marker in text for marker in markers)
+        ),
+        None,
+    )
+    if category is None or record.step_id is None:
+        return None
+    return ExecutionBlocker(
+        category=category,
+        step_id=record.step_id,
+        call_id=record.call_id,
+        tool_name=record.tool_name,
+        reason=record.error,
+        retryable=False,
+        requires_browser=record.tool_name.startswith("browser_"),
+    )
 
 
 async def execute_tool_action(
@@ -1686,9 +1992,7 @@ async def execute_tool_action(
             )
             return _materialize_tool_call(state, record)
         authorized_attempt = record.attempt_count + 1
-        has_one_shot_permit = (
-            record.authorized_retry_attempt == authorized_attempt
-        )
+        has_one_shot_permit = record.authorized_retry_attempt == authorized_attempt
         if not replay_safe and not has_one_shot_permit:
             preview = redact_preview(action.arguments)
             await _trace(
@@ -1708,8 +2012,10 @@ async def execute_tool_action(
                     action_index=action.action_index,
                     tool_name=action.tool_name or "",
                     call_id=action.call_id,
-                    reason=("Journal 仅有 STARTED；Tool 可能尚未执行、执行中，"
-                            "或远端已产生副作用但终态未提交"),
+                    reason=(
+                        "Journal 仅有 STARTED；Tool 可能尚未执行、执行中，"
+                        "或远端已产生副作用但终态未提交"
+                    ),
                     replay_safe=False,
                     arguments_preview=cast(dict[str, Any], preview),
                 ),
@@ -1922,7 +2228,8 @@ def recovery_review(state: TaskState) -> TaskStateUpdate:
         return {
             "recovery_issue": updated,
             "status": TaskStatus.FAILED,
-            "error": response.reason or f"Human aborted ambiguous action {issue.action_key}",
+            "error": response.reason
+            or f"Human aborted ambiguous action {issue.action_key}",
         }
     updated = issue.model_copy(
         update={"retry_authorized": False, "resolution_reason": response.reason}
@@ -1963,7 +2270,9 @@ async def authorize_recovery_retry(
     issue = state.get("recovery_issue")
     action = state.get("pending_executor_action")
     if issue is None or action is None:
-        return _failed_update("authorize_recovery_retry 缺少 RecoveryIssue 或 frozen action")
+        return _failed_update(
+            "authorize_recovery_retry 缺少 RecoveryIssue 或 frozen action"
+        )
     try:
         action_key = action_key_for(state)
     except Exception as exc:
@@ -2105,10 +2414,7 @@ async def verify_task_traced(
         except Exception as exc:
             detail = redact_sensitive_values(str(exc))
             update["status"] = TaskStatus.FAILED
-            update["error"] = (
-                "Final Answer 生成失败: "
-                f"{type(exc).__name__}: {detail}"
-            )
+            update["error"] = f"Final Answer 生成失败: {type(exc).__name__}: {detail}"
             await _trace(
                 trace_recorder,
                 state,
@@ -2168,7 +2474,9 @@ def advance_step_action_level(state: TaskState) -> TaskStateUpdate:
 
 def _route_after_decision(
     state: TaskState,
-) -> Literal["assess_policy", "build_step_outcome", "decide_action", "verify_step", "end"]:
+) -> Literal[
+    "assess_policy", "build_step_outcome", "decide_action", "verify_step", "end"
+]:
     if state["status"] is TaskStatus.FAILED:
         return "end"
     action = state.get("pending_executor_action")
@@ -2202,11 +2510,13 @@ def _route_after_policy(
 
 def _route_after_tool_execution(
     state: TaskState,
-) -> Literal["decide_action", "recovery_review", "end"]:
+) -> Literal["decide_action", "replan_task", "recovery_review", "end"]:
     if state["status"] is TaskStatus.INTERRUPTED:
         return "recovery_review"
     if state["status"] is TaskStatus.FAILED:
         return "end"
+    if state.get("pending_replan") is not None:
+        return "replan_task"
     return "decide_action"
 
 
@@ -2230,7 +2540,11 @@ def _route_after_action_verification(
     if state.get("pending_replan") is not None:
         return "replan_task"
     result = state.get("step_verification")
-    return "advance_step" if result is not None and result.verified else "reset_step_attempt"
+    return (
+        "advance_step"
+        if result is not None and result.verified
+        else "reset_step_attempt"
+    )
 
 
 def _route_after_action_advance(
@@ -2249,8 +2563,21 @@ def _route_after_task_verification(
     return "failure" if state["status"] is TaskStatus.FAILED else "end"
 
 
-def _route_after_replan(state: TaskState) -> Literal["begin_step", "end"]:
-    return "end" if state["status"] is TaskStatus.FAILED else "begin_step"
+def _route_after_replan(
+    state: TaskState,
+) -> Literal["begin_step", "human_assistance", "decide_action", "end"]:
+    if state["status"] is TaskStatus.FAILED:
+        return "end"
+    if state.get("pending_human_assistance") is not None:
+        return "human_assistance"
+    # REPLAN creates a new current step; other accepted decisions can continue it.
+    return (
+        "begin_step" if state.get("current_action_index", 0) == 0 else "decide_action"
+    )
+
+
+def _route_after_human_assistance(state: TaskState) -> Literal["decide_action", "end"]:
+    return "end" if state["status"] is TaskStatus.FAILED else "decide_action"
 
 
 def _build_action_level_graph(
@@ -2266,6 +2593,7 @@ def _build_action_level_graph(
     replanner: TaskReplannerLike,
     context_builder: ContextBuilder,
     max_replans: int,
+    max_human_assists: int,
     trace_recorder: TraceRecorderLike,
     finalizer: FinalAnswerGeneratorLike,
 ) -> CompiledStateGraph:
@@ -2355,8 +2683,13 @@ def _build_action_level_graph(
             replanner=replanner,
             context_builder=context_builder,
             max_replans=max_replans,
+            max_human_assists=max_human_assists,
             trace_recorder=trace_recorder,
         ),
+    )
+    builder.add_node(
+        "human_assistance",
+        partial(human_assistance_traced, trace_recorder=trace_recorder),
     )
     builder.add_node(
         "finalize_terminal",
@@ -2367,7 +2700,9 @@ def _build_action_level_graph(
     builder.add_edge("initialize_task", "analyze_task")
     builder.add_edge("analyze_task", "plan_task")
     builder.add_conditional_edges(
-        "plan_task", _route_after_plan, {"execute_step": "begin_step", "end": "finalize_terminal"}
+        "plan_task",
+        _route_after_plan,
+        {"execute_step": "begin_step", "end": "finalize_terminal"},
     )
     builder.add_edge("begin_step", "decide_action")
     builder.add_conditional_edges(
@@ -2406,12 +2741,20 @@ def _build_action_level_graph(
     builder.add_conditional_edges(
         "execute_tool_action",
         _route_after_tool_execution,
-        {"decide_action": "decide_action", "recovery_review": "recovery_review", "end": "finalize_terminal"},
+        {
+            "decide_action": "decide_action",
+            "replan_task": "replan_task",
+            "recovery_review": "recovery_review",
+            "end": "finalize_terminal",
+        },
     )
     builder.add_conditional_edges(
         "recovery_review",
         _route_after_recovery,
-        {"authorize_recovery_retry": "authorize_recovery_retry", "end": "finalize_terminal"},
+        {
+            "authorize_recovery_retry": "authorize_recovery_retry",
+            "end": "finalize_terminal",
+        },
     )
     builder.add_conditional_edges(
         "authorize_recovery_retry",
@@ -2433,7 +2776,11 @@ def _build_action_level_graph(
     builder.add_conditional_edges(
         "advance_step",
         _route_after_action_advance,
-        {"decide_action": "decide_action", "verify_task": "verify_task", "end": "finalize_terminal"},
+        {
+            "decide_action": "decide_action",
+            "verify_task": "verify_task",
+            "end": "finalize_terminal",
+        },
     )
     builder.add_conditional_edges(
         "verify_task",
@@ -2443,7 +2790,17 @@ def _build_action_level_graph(
     builder.add_conditional_edges(
         "replan_task",
         _route_after_replan,
-        {"begin_step": "begin_step", "end": "finalize_terminal"},
+        {
+            "begin_step": "begin_step",
+            "human_assistance": "human_assistance",
+            "decide_action": "decide_action",
+            "end": "finalize_terminal",
+        },
+    )
+    builder.add_conditional_edges(
+        "human_assistance",
+        _route_after_human_assistance,
+        {"decide_action": "decide_action", "end": "finalize_terminal"},
     )
     builder.add_edge("finalize_terminal", END)
     return builder.compile(checkpointer=checkpointer)
@@ -2460,6 +2817,7 @@ def build_graph(
     fault_injector: ExecutionFaultInjector | None = None,
     replanner: TaskReplannerLike | None = None,
     max_replans: int = 2,
+    max_human_assists: int = 2,
     context_builder: ContextBuilder | None = None,
     trace_recorder: TraceRecorderLike | None = None,
     finalizer: FinalAnswerGeneratorLike | None = None,
@@ -2470,6 +2828,8 @@ def build_graph(
         raise ValueError("max_step_attempts 必须至少为 1")
     if max_replans < 0:
         raise ValueError("max_replans 必须大于等于 0")
+    if max_human_assists < 0:
+        raise ValueError("max_human_assists 必须大于等于 0")
     active_analyzer = analyzer if analyzer is not None else TaskAnalyzer()
     active_planner = planner if planner is not None else TaskPlanner()
     active_executor = executor if executor is not None else TaskExecutor(ToolRegistry())
@@ -2487,6 +2847,7 @@ def build_graph(
             replanner=replanner or TaskReplanner(),
             context_builder=context_builder or ContextBuilder(),
             max_replans=max_replans,
+            max_human_assists=max_human_assists,
             trace_recorder=trace_recorder or NoOpTraceRecorder(),
             finalizer=finalizer or VerifiedResultsRenderer(),
         )

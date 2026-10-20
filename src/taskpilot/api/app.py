@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, status
 
 from taskpilot.api.schemas import (
     CreateTaskRequest,
+    HumanAssistanceResumeRequest,
     InterruptView,
     PlanStepView,
     RecoveryResumeRequest,
@@ -62,10 +63,14 @@ def create_app(service: TaskPilotService | None = None) -> FastAPI:
         if isinstance(payload, ToolApprovalResumeRequest):
             interrupt_type = payload.type
             response = payload.model_dump(exclude={"type"}, exclude_none=True)
-        else:
+        elif isinstance(payload, RecoveryResumeRequest):
             recovery = cast(RecoveryResumeRequest, payload)
             interrupt_type = recovery.type
             response = recovery.model_dump(exclude={"type"}, exclude_none=True)
+        else:
+            assistance = cast(HumanAssistanceResumeRequest, payload)
+            interrupt_type = assistance.type
+            response = assistance.model_dump(exclude={"type"}, exclude_none=True)
         try:
             snapshot = await runtime.resume_task(
                 task_id,
@@ -157,6 +162,21 @@ def _task_view(snapshot: TaskRunSnapshot) -> TaskView:
             choices=(
                 list(raw["choices"]) if isinstance(raw.get("choices"), list) else None
             ),
+            required_action=(
+                str(raw["required_action"])
+                if raw.get("required_action") is not None
+                else None
+            ),
+            resume_condition=(
+                str(raw["resume_condition"])
+                if raw.get("resume_condition") is not None
+                else None
+            ),
+            requires_browser=(
+                bool(raw["requires_browser"])
+                if raw.get("requires_browser") is not None
+                else None
+            ),
         )
     return TaskView(
         task_id=str(state["task_id"]),
@@ -165,6 +185,7 @@ def _task_view(snapshot: TaskRunSnapshot) -> TaskView:
         current_step_id=state.get("current_step_id"),
         plan_revision=int(state.get("plan_revision", 0)),
         replan_count=int(state.get("replan_count", 0)),
+        human_assistance_count=int(state.get("human_assistance_count", 0)),
         plan=steps,
         interrupt=interrupt,
         final_answer=state.get("final_answer"),

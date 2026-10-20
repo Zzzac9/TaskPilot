@@ -93,7 +93,10 @@ class ContextBuilder:
         truncated: list[str] = []
 
         feedback: Any = None
-        if verification_feedback is not None and verification_feedback.step_id == step.id:
+        if (
+            verification_feedback is not None
+            and verification_feedback.step_id == step.id
+        ):
             feedback, cut = _truncate(
                 verification_feedback.model_dump(mode="json"),
                 self.config.max_feedback_chars,
@@ -196,6 +199,11 @@ class ContextBuilder:
                 "reason": request.reason,
                 "missing_requirements": request.missing_requirements,
                 "verification_feedback": request.verification_feedback,
+                "blocking_failure": (
+                    request.blocking_failure.model_dump(mode="json")
+                    if request.blocking_failure is not None
+                    else None
+                ),
             },
             self.config.max_feedback_chars,
         )
@@ -325,11 +333,17 @@ class ContextBuilder:
         # 最新 Observation 优先；最终恢复为时间顺序，便于模型阅读。
         for observation in reversed(observations):
             candidate = list(reversed([observation, *included]))
-            if _size({**content, "current_step_observations": candidate}) <= self.config.max_total_chars:
+            if (
+                _size({**content, "current_step_observations": candidate})
+                <= self.config.max_total_chars
+            ):
                 included.insert(0, observation)
             else:
                 truncated.append("current_step_observations")
-        if _size({**content, "current_step_observations": included}) <= self.config.max_total_chars:
+        if (
+            _size({**content, "current_step_observations": included})
+            <= self.config.max_total_chars
+        ):
             content["current_step_observations"] = included
         else:
             truncated.append("current_step_observations")

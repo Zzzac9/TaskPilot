@@ -34,6 +34,7 @@ _PROGRESS_NODE_LABELS = {
     "prepare_approval": "准备人工审批",
     "human_approval": "处理人工审批",
     "recovery_review": "检查崩溃恢复",
+    "human_assistance": "等待并复核人工协助",
 }
 
 
@@ -42,8 +43,8 @@ def _progress_latency(event: TraceEvent) -> str:
 
 
 def _progress_detail(value: Any, *, max_chars: int = 240) -> str:
-    detail = redact_sensitive_values(str(value or "")).replace("\r", " ").replace(
-        "\n", " "
+    detail = (
+        redact_sensitive_values(str(value or "")).replace("\r", " ").replace("\n", " ")
     )
     return detail if len(detail) <= max_chars else detail[:max_chars] + "…"
 
@@ -64,7 +65,9 @@ def render_progress_event(event: TraceEvent) -> str | None:
     if event.event_type is TraceEventType.TASK_ANALYZED:
         return f"{prefix} task analysis {event.status}{latency}"
     if event.event_type is TraceEventType.PLAN_CREATED:
-        return f"{prefix} plan ready steps={len(payload.get('step_ids') or [])}{latency}"
+        return (
+            f"{prefix} plan ready steps={len(payload.get('step_ids') or [])}{latency}"
+        )
     if event.event_type is TraceEventType.PLAN_REPLANNED:
         return f"{prefix} plan revised status={event.status}{latency}"
     if event.event_type is TraceEventType.STEP_STARTED:
@@ -114,7 +117,13 @@ def render_progress_event(event: TraceEvent) -> str | None:
     if event.event_type is TraceEventType.APPROVAL_REQUESTED:
         return f"{prefix} waiting for approval tool={payload.get('tool_name')}{step}"
     if event.event_type is TraceEventType.RECOVERY_REQUIRED:
-        return f"{prefix} recovery review required tool={payload.get('tool_name')}{step}"
+        return (
+            f"{prefix} recovery review required tool={payload.get('tool_name')}{step}"
+        )
+    if event.event_type is TraceEventType.HUMAN_ASSISTANCE_REQUESTED:
+        return f"{prefix} human assistance requested{step}"
+    if event.event_type is TraceEventType.HUMAN_ASSISTANCE_RESOLVED:
+        return f"{prefix} human assistance {event.status}{step}"
     if event.event_type is TraceEventType.TASK_COMPLETED:
         return f"{prefix} task completed after verification"
     if event.event_type is TraceEventType.TASK_FAILED:
@@ -356,17 +365,17 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     while run.interrupt is not None:
         payload = run.interrupt
         print(f"interrupt_type={payload['type']}")
-        print(f"approval_tool={payload['tool_name']}")
-        print(f"approval_reason={payload['reason']}")
-        print(
-            "approval_arguments_preview="
-            + json.dumps(
-                payload["arguments_preview"],
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
+        print(f"interrupt_reason={payload.get('reason')}")
         if payload["type"] == "tool_approval":
+            print(f"approval_tool={payload.get('tool_name')}")
+            print(
+                "approval_arguments_preview="
+                + json.dumps(
+                    payload.get("arguments_preview"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
             print(f"approval_risk={payload['risk_level']}")
             answer = await asyncio.to_thread(input, "Approve? [y/N] ")
             resume = (
@@ -375,6 +384,15 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
                 else {"decision": "reject", "reason": "Rejected from CLI"}
             )
         elif payload["type"] == "ambiguous_tool_recovery":
+            print(f"recovery_tool={payload.get('tool_name')}")
+            print(
+                "recovery_arguments_preview="
+                + json.dumps(
+                    payload.get("arguments_preview"),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
             answer = await asyncio.to_thread(
                 input,
                 "Action may already have run. Retry anyway? [y/N] ",
@@ -383,6 +401,18 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
                 {"choice": "retry", "reason": "Retry accepted from CLI"}
                 if answer.strip().lower() == "y"
                 else {"choice": "abort", "reason": "Aborted from CLI"}
+            )
+        elif payload["type"] == "human_assistance":
+            print(f"required_action={payload.get('required_action')}")
+            print(f"resume_condition={payload.get('resume_condition')}")
+            answer = await asyncio.to_thread(
+                input,
+                "完成上述操作并准备让 TaskPilot 重新验证了吗？ [y/N] ",
+            )
+            resume = (
+                {"choice": "completed", "reason": "Completed from CLI"}
+                if answer.strip().lower() == "y"
+                else {"choice": "cancel", "reason": "Canceled from CLI"}
             )
         else:
             print(f"error=unsupported interrupt type: {payload['type']}")

@@ -10,14 +10,18 @@ from taskpilot.llm import create_chat_model, invoke_structured_with_retry
 from taskpilot.models import (
     PlanStep,
     PlanStepStatus,
+    ReplanDecision,
     ReplanProposal,
 )
 
 
-REPLANNER_SYSTEM_PROMPT = """你是 Task Replanner，只规划从当前真实状态出发接下来还需要完成的语义子目标（WHAT），不执行任务，也不宣布整个任务已经完成。
+REPLANNER_SYSTEM_PROMPT = """你是 Task Replanner。你必须选择 REPLAN、REQUEST_HUMAN 或 ABORT；这只是建议，Runtime 会独立校验并控制状态路由。
+REPLAN 只规划从当前真实状态出发接下来还需要完成的语义子目标（WHAT），不执行任务，也不宣布整个任务已经完成。
 用户 Task Goal 与 Constraints 不允许修改；verified StepResult 是已完成事实，必须复用且不得让对应 completed Step 重新执行。failed/skipped 的旧路径可以替代，但不得把它们当作已完成事实。
 failed Step 的 recent tool observations 也是当前环境的真实瞬时状态：若其中显示浏览器已打开或激活了目标页面，新计划必须从该页面继续，不得规划重新导航并覆盖已经到达的页面。
-你只输出剩余工作的新 PlanStep，不复制历史步骤。每个新 Step 必须有非空、仅针对该步骤的 success_criteria，并保持 pending、retry_count=0。
+选择 REPLAN 时，只输出剩余工作的新 PlanStep，不复制历史步骤。每个新 Step 必须有非空、仅针对该步骤的 success_criteria，并保持 pending、retry_count=0。
+只有输入包含明确的 non-retryable blocking_failure（登录、验证码或权限阻塞）时才可选择 REQUEST_HUMAN；此时 steps 必须为空，并明确填写 required_human_action 与可通过重新观察验证的 resume_condition。不得把人工协助写成 approve/approval，也不得声称已获高风险授权。
+无法安全重规划且人工协助不合理时选择 ABORT；steps 必须为空，并给出明确原因。
 所有新 Step ID 必须严格大于输入中的 historical_max_step_id。depends_on 只能引用已 completed 的历史 Step ID，或本 proposal 中排在当前 Step 之前的新 Step ID；禁止依赖 failed、skipped、running 或 pending 的历史 Step。
 不得选择或调用 Tool，不得输出 search(...)、browser_open(...)、click(...)、filesystem.write(...) 等调用、具体 Tool arguments、CSS selector 或浏览器定位器。
 不得添加用户没有给出的硬约束，不得虚构环境事实、工具结果或尚未获得的数据。输出必须符合 ReplanProposal schema。"""
@@ -61,8 +65,22 @@ def validate_replan_proposal(
 ) -> None:
     """拒绝会破坏历史身份、依赖或执行初态的 Proposal。"""
 
+    if proposal.decision is not ReplanDecision.REPLAN:
+        if proposal.steps:
+            raise ValueError(f"{proposal.decision.value} 不得包含 PlanStep")
+        if proposal.decision is ReplanDecision.REQUEST_HUMAN:
+            if not (proposal.required_human_action or "").strip():
+                raise ValueError("REQUEST_HUMAN 缺少 required_human_action")
+            if not (proposal.resume_condition or "").strip():
+                raise ValueError("REQUEST_HUMAN 缺少 resume_condition")
+        return
     if not proposal.steps:
-        raise ValueError("ReplanProposal.steps 不能为空")
+        raise ValueError("REPLAN 的 ReplanProposal.steps 不能为空")
+    if (
+        proposal.required_human_action is not None
+        or proposal.resume_condition is not None
+    ):
+        raise ValueError("REPLAN 不得包含 Human Assistance 字段")
     historical_max = max((step.id for step in historical_plan), default=0)
     ids = [step.id for step in proposal.steps]
     if len(ids) != len(set(ids)):
