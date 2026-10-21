@@ -6,6 +6,7 @@ from typing import Any, Protocol, Sequence
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from taskpilot.llm import create_chat_model, invoke_structured_with_retry
+from taskpilot.requirements import build_requirement_contract
 from taskpilot.models import (
     CriterionCheck,
     PlanStep,
@@ -21,7 +22,9 @@ from taskpilot.models import (
 STEP_VERIFIER_SYSTEM_PROMPT = """你是 Step Verifier，只验证当前 PlanStep，不规划、不执行、不调用工具，也不修改 Task Goal 或 Constraints。
 必须对当前 PlanStep 的每一项 success_criteria 分别判断，并使用该条件在原列表中的下标作为 criterion_index。
 只能把提供的 StepExecutionOutcome、当前步骤 ToolCallRecords 和 dependency StepResults 当作证据；Executor 的完成声明本身不是通过依据。
+当 ToolCallRecord 的 reusable_evidence=true 时，它是 Host 审核过的历史只读观察，可以提供原始事实，但必须检查来源、适用性和是否仍然有效；绝不能把之前未验证的完成声明当作证据，也不能复用任何写入或高风险 Tool。
 不得虚构工具未返回的信息，不得补做任务，也不得使用未验证的其他步骤声明。
+requirement_contract 的 R 编号是用户必需条件，O 编号为可选偏好；当前步骤的 success_criteria 只是执行细化。不得把没有对应原始 R 要求的额外细节当成任务的硬性完成条件；需要明确区分证据不足、真正未满足核心目标和可选细节缺失。
 当成功标准仅要求可追溯来源、并未要求条目专属详情链接时，如果当前 ToolCallRecords 中同一个官方列表页的 URL 和正文/快照能明确支持对应条目，可以接受该列表页 URL 作为这些条目的共同来源。绝不允许仅凭一个 URL 推断网页中未出现的条目；不能对欠缺证据的条目放行。
 checks 必须完整覆盖每一个 success_criteria，criterion_index 不得重复或遗漏。
 只有所有 check 的 satisfied 都为 true 时，verified 才能为 true；只要一项不满足，verified 必须为 false。
@@ -32,7 +35,8 @@ checks 必须完整覆盖每一个 success_criteria，criterion_index 不得重�
 TASK_VERIFIER_SYSTEM_PROMPT = """你是 Task Verifier，只验证整个 Task 是否完成，不规划、不执行、不调用工具，也不修改 Goal、Constraints 或 Completion Criteria。
 所有 PlanStep 已完成并不自动表示 Task 成功；必须逐项检查 TaskSpec.completion_criteria。
 只能使用提供的、已经验证的 StepResults 和 task_results，不得使用未验证的 Executor claim，也不得虚构缺失信息。
-任一 Completion Criterion 不满足时，completed 必须为 false，并在 missing_requirements 中列出缺失要求。
+仅 TaskSpec.completion_criteria 和明确的用户 Constraints 是必需的；optional_criteria 不构成完成的硬门槛。
+任一必需 Completion Criterion 不满足时，completed 必须为 false，并在 missing_requirements 中列出缺失要求。
 completed 为 true 时 missing_requirements 必须为空；completed 为 false 时 reason 必须清楚说明未完成原因。
 next_action 只能给出建议，不得实际重规划或执行。
 输出必须符合 VerificationResult schema。"""
@@ -163,7 +167,7 @@ class TaskVerifier:
         relevant_calls = [
             record.model_dump(mode="json")
             for record in tool_calls
-            if record.step_id == step.id
+            if record.step_id == step.id or record.reusable_evidence
         ]
         relevant_dependencies = [
             result.model_dump(mode="json")
@@ -174,6 +178,7 @@ class TaskVerifier:
             "task": {
                 "goal": task_spec.goal,
                 "constraints": task_spec.constraints,
+                "requirement_contract": build_requirement_contract(task_spec).model_dump(mode="json"),
             },
             "current_step": step.model_dump(mode="json"),
             "step_outcome": outcome.model_dump(mode="json"),
@@ -202,6 +207,7 @@ class TaskVerifier:
 
         context = {
             "task": task_spec.model_dump(mode="json"),
+            "requirement_contract": build_requirement_contract(task_spec).model_dump(mode="json"),
             "verified_step_results": [
                 result.model_dump(mode="json") for result in step_results
             ],

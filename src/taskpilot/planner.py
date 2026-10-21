@@ -6,6 +6,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from taskpilot.llm import create_chat_model, invoke_structured_with_retry
 from taskpilot.models import TaskPlan, TaskSpec
+from taskpilot.requirements import build_requirement_contract, validate_step_references
 
 
 PLANNER_SYSTEM_PROMPT = """你是 Initial Planner，只负责根据输入的 TaskSpec 创建计划，不重新解释或修改用户目标，也不执行任务。
@@ -17,6 +18,9 @@ PLANNER_SYSTEM_PROMPT = """你是 Initial Planner，只负责根据输入的 Tas
 特别是用户只要求“找出并列出两个岗位”时，只需岗位名称、可追溯来源和与请求条件的对应关系；不得擅自升级为必须展开岗位详情、逐项获取岗位职责、岗位方向下拉框或其他用户未要求的额外证据。
 每条 success_criteria 都应能直接追溯到 TaskSpec 的目标或完成条件；用于搜索的中间信息不应变成新的完成门槛。
 如果任务只要求列出若干网页上可见的条目，且同一官方列表页能明确呈现各条目，则该列表页的 URL 可以作为条目共同的来源；不得擅自要求为每条条目额外获取专属详情 URL。
+TaskSpec.completion_criteria 顺序编号为 R1、R2、...，optional_criteria 编号为 O1、O2、...。
+每个 PlanStep 必须填写 requirement_ids（至少一个已存在的编号），说明它支持哪项原始要求；不得发明新的编号。每项原始必需条件必须被至少一步覆盖。
+success_criteria 仅细化执行进度，不得要求用户原始条件之外的额外最终产物；可选条件失败不能阻止核心任务完成。
 Planner 只做规划，不做执行。输出必须符合 TaskPlan schema。"""
 
 
@@ -29,8 +33,10 @@ class TaskPlannerLike(Protocol):
         ...
 
 
-def validate_plan(task_plan: TaskPlan) -> None:
-    """对 Initial Planner 输出执行轻量、确定性的结构校验。"""
+def validate_plan(
+    task_plan: TaskPlan, task_spec: TaskSpec | None = None
+) -> None:
+    """验证计划结构；生产模型计划还必须显式引用已冻结的用户要求。"""
 
     if not task_plan.steps:
         raise ValueError("TaskPlan.steps 不能为空")
@@ -44,8 +50,13 @@ def validate_plan(task_plan: TaskPlan) -> None:
         right <= left for left, right in zip(step_ids, step_ids[1:])
     ):
         raise ValueError("Initial PlanStep.id 必须严格递增")
+    contract = build_requirement_contract(task_spec) if task_spec is not None else None
+    covered: set[str] = set()
     step_positions = {step_id: index for index, step_id in enumerate(step_ids)}
     for index, step in enumerate(task_plan.steps):
+        if contract is not None and contract.all_ids:
+            validate_step_references(step.requirement_ids, contract)
+            covered.update(step.requirement_ids)
         if not step.success_criteria:
             raise ValueError(f"PlanStep {step.id} 缺少 success_criteria")
         for dependency_id in step.depends_on:
@@ -59,6 +70,11 @@ def validate_plan(task_plan: TaskPlan) -> None:
                 raise ValueError(
                     f"PlanStep {step.id} 的依赖 {dependency_id} 必须出现在当前步骤之前"
                 )
+    if contract is not None and contract.required_ids - covered:
+        raise ValueError(
+            "Plan 未覆盖全部用户必需条件: "
+            f"{sorted(contract.required_ids - covered)}"
+        )
 
 
 class TaskPlanner:
@@ -81,7 +97,7 @@ class TaskPlanner:
                 ("human", "TaskSpec:\n" + task_spec.model_dump_json(indent=2)),
             ],
         )
-        validate_plan(task_plan)
+        validate_plan(task_plan, task_spec)
         # revision 属于 Graph 控制信息，不信任模型生成值。
         return TaskPlan(
             steps=[step.model_copy(update={"revision": 0}) for step in task_plan.steps]

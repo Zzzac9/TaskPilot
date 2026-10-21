@@ -466,6 +466,15 @@ class TaskExecutor:
         metadata = getattr(tool, "metadata", {}) or {}
         return metadata.get("replay_safe") is True
 
+    def is_reusable_evidence(self, action: ExecutorAction) -> bool:
+        """read_only 和 replay_safe 必须都由 Host Tool metadata 显式声明。"""
+
+        if not self.is_replay_safe(action):
+            return False
+        tool = self._registry.get(action.tool_name or "")
+        metadata = getattr(tool, "metadata", {}) or {}
+        return metadata.get("read_only") is True
+
     async def invoke_frozen_action(self, action: ExecutorAction) -> Any:
         """执行一个已确定的 Tool action；调用方负责 journal ordering。"""
 

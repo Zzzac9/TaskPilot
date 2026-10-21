@@ -34,6 +34,7 @@ class TaskStatus(str, Enum):
     WAITING_HUMAN_ASSISTANCE = "waiting_human_assistance"
     COMPLETED = "completed"
     FAILED = "failed"
+    PARTIAL = "partial"
     INTERRUPTED = "interrupted"
 
 
@@ -83,6 +84,8 @@ class TaskSpec(BaseModel):
     constraints: dict[str, Any] = Field(default_factory=dict)
     expected_output: str | None = None
     completion_criteria: list[str] = Field(default_factory=list)
+    # 明确可降级的输出偏好；不会影响 required completion_criteria。
+    optional_criteria: list[str] = Field(default_factory=list)
 
 
 class PlanStep(BaseModel):
@@ -94,6 +97,8 @@ class PlanStep(BaseModel):
     retry_count: int = 0
     depends_on: list[int] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
+    # R1/R2 为 TaskSpec 必需条件，O1/O2 为可选条件；仅作为来源引用。
+    requirement_ids: list[str] = Field(default_factory=list)
     # revision 由 Graph 写入，模型输出的值不作为可信控制信息。
     revision: int = 0
 
@@ -112,6 +117,7 @@ class ReplanRequest(BaseModel):
     reason: str
     missing_requirements: list[str] = Field(default_factory=list)
     verification_feedback: str | None = None
+    failure_category: str | None = None
     blocking_failure: "ExecutionBlocker | None" = None
 
 
@@ -217,6 +223,8 @@ class ToolCallRecord(BaseModel):
     status: ToolCallStatus = ToolCallStatus.PENDING
     result: Any | None = None
     error: str | None = None
+    # 仅 Host 标记为 read_only 且 replay_safe 的成功 Tool observation 可跨 Replan 使用。
+    reusable_evidence: bool = False
 
 
 class ExecutorAction(BaseModel):

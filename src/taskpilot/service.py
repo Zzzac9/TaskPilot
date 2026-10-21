@@ -159,6 +159,7 @@ def create_initial_state(
         "policy_decisions": [],
         "approval_records": [],
         "current_action_index": 0,
+        "total_action_decisions": 0,
         "executor_feedback": None,
         "duplicate_observation_corrections": 0,
         "pending_executor_action": None,
@@ -193,6 +194,7 @@ class TaskPilotService:
         browser_provider_factory: BrowserProviderFactory = _browser_provider_factory,
         max_step_attempts: int = 3,
         max_replans: int = 2,
+        max_total_actions: int = 60,
         max_human_assists: int = 2,
         graph_recursion_limit: int = 500,
         fault_injector: ExecutionFaultInjector | None = None,
@@ -210,6 +212,9 @@ class TaskPilotService:
         self.browser_provider_factory = browser_provider_factory
         self.max_step_attempts = max_step_attempts
         self.max_replans = max_replans
+        if max_total_actions < 1:
+            raise ValueError("max_total_actions 必须为正数")
+        self.max_total_actions = max_total_actions
         self.max_human_assists = max_human_assists
         self.graph_recursion_limit = graph_recursion_limit
         self.fault_injector = fault_injector
@@ -503,6 +508,7 @@ class TaskPilotService:
                 executor=executor,
                 verifier=components.verifier,
                 max_step_attempts=self.max_step_attempts,
+                max_total_actions=self.max_total_actions,
                 checkpointer=checkpoint_provider.checkpointer,
                 action_journal=journal,
                 fault_injector=self.fault_injector,
@@ -643,6 +649,7 @@ class TaskPilotService:
         should_retain = snapshot.interrupt is not None and status not in {
             TaskStatus.COMPLETED.value,
             TaskStatus.FAILED.value,
+            TaskStatus.PARTIAL.value,
         }
         if not should_retain:
             await self._close_live_runtime(task_id, runtime)

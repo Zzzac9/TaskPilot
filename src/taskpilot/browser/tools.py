@@ -167,7 +167,7 @@ class BrowserTools:
                     }
                 ),
                 self.observe,
-                metadata=_browser_metadata("low", True),
+                metadata={**_browser_metadata("low", True), "read_only": True},
             ),
             BrowserTool(
                 "browser_click",
@@ -258,14 +258,14 @@ class BrowserTools:
                     }
                 ),
                 self.extract_text,
-                metadata=_browser_metadata("low", True),
+                metadata={**_browser_metadata("low", True), "read_only": True},
             ),
             BrowserTool(
                 "browser_list_pages",
                 "List stable page IDs with active state, title and URL.",
                 _object_schema({}),
                 self.list_pages,
-                metadata=_browser_metadata("low", True),
+                metadata={**_browser_metadata("low", True), "read_only": True},
             ),
             BrowserTool(
                 "browser_switch_page",

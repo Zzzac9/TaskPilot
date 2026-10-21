@@ -952,6 +952,7 @@ async def test_action_level_max_actions_remains_bounded(
         graph = build_graph(
             analyzer=FakeAnalyzer(), planner=FakePlanner(), executor=executor,
             verifier=FakeVerifier(), max_step_attempts=1,
+            max_replans=0,  # 只测单轮硬上限；跨轮重规划另由 Phase14 验证
             checkpointer=checkpoint.checkpointer, action_journal=journal,
         )
         result = await graph.ainvoke(

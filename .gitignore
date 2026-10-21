@@ -289,3 +289,7 @@ $RECYCLE.BIN/
 *.backup
 *~
 .venv-benchmark/
+
+# Phase14 benchmark runs contain transient browser artifacts, SQLite traces and reports.
+/benchmarks/results/*-phase14-contract/
+/benchmarks/results/*-phase14-real-llm/

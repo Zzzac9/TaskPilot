@@ -46,6 +46,8 @@ class TaskState(TypedDict):
     approval_records: list[ApprovalRecord]
     # 每次模型 decision 后递增；审批与崩溃恢复都不能偷偷重置。
     current_action_index: int
+    # 跨 attempt / revision 的全任务级动作预算，防止通过 Replan 刷新额度。
+    total_action_decisions: int
     # 重复 browser_observe 被控制层拦截后的定向反馈与有限纠偏计数。
     executor_feedback: str | None
     duplicate_observation_corrections: int
@@ -87,6 +89,7 @@ class TaskStateUpdate(TypedDict, total=False):
     policy_decisions: list[PolicyDecision]
     approval_records: list[ApprovalRecord]
     current_action_index: int
+    total_action_decisions: int
     executor_feedback: str | None
     duplicate_observation_corrections: int
     pending_executor_action: ExecutorAction | None

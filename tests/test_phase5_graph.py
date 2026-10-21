@@ -335,7 +335,7 @@ async def test_task_verifier_rejection_fails_task_after_steps_complete() -> None
 
     assert result["plan"][0].status is PlanStepStatus.COMPLETED
     assert result["verification"].completed is False
-    assert result["status"] is TaskStatus.FAILED
+    assert result["status"] is TaskStatus.PARTIAL
     assert "next_action=replan" in result["error"]
 
 

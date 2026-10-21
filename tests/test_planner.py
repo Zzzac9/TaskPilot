@@ -51,11 +51,13 @@ def make_task_plan() -> TaskPlan:
         steps=[
             PlanStep(
                 id=1,
+                requirement_ids=['R1'],
                 description="发现一批与目标地点相关、可进一步核实的候选健身房",
                 success_criteria=["获得一批与目标地点相关的候选"],
             ),
             PlanStep(
                 id=2,
+                requirement_ids=['R2'],
                 description="获取候选健身房的价格、地址和营业时间",
                 depends_on=[1],
                 success_criteria=[
@@ -66,6 +68,7 @@ def make_task_plan() -> TaskPlan:
             ),
             PlanStep(
                 id=3,
+                requirement_ids=['R1', 'R2'],
                 description="根据地点、价格和数量要求筛选最终候选",
                 depends_on=[2],
                 success_criteria=[
@@ -75,6 +78,7 @@ def make_task_plan() -> TaskPlan:
             ),
             PlanStep(
                 id=4,
+                requirement_ids=['R3'],
                 description="把最终候选整理为CSV结果",
                 depends_on=[3],
                 success_criteria=["CSV包含最终候选及其关键信息"],

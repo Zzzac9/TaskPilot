@@ -214,12 +214,14 @@ async def test_step_failure_replans_with_fresh_id_and_preserves_history() -> Non
                 steps=[
                     PlanStep(
                         id=4,
+                        requirement_ids=["R1"],
                         description="alternative path",
                         depends_on=[1],
                         success_criteria=["fact recovered"],
                     ),
                     PlanStep(
                         id=5,
+                        requirement_ids=["R1"],
                         description="finish remaining work",
                         depends_on=[4],
                         success_criteria=["remaining work complete"],
@@ -322,6 +324,7 @@ async def test_task_verification_replans_and_reuses_completed_result() -> None:
                 steps=[
                     PlanStep(
                         id=2,
+                        requirement_ids=["R1"],
                         description="produce final format",
                         depends_on=[1],
                         success_criteria=["format produced"],
@@ -396,7 +399,7 @@ async def test_max_replans_zero_preserves_fail_fast() -> None:
 async def test_replan_budget_is_bounded() -> None:
     models: list[FakeFunctionCallingModel] = []
     replanner = FakeReplanner(
-        [ReplanProposal(reason="once", steps=[PlanStep(id=2, description="second", success_criteria=["done"])])]
+        [ReplanProposal(reason="once", steps=[PlanStep(id=2, description="second", requirement_ids=["R1"], success_criteria=["done"])])]
     )
     graph = build_graph(
         analyzer=FakeAnalyzer(), planner=FakePlanner(),
@@ -593,11 +596,11 @@ async def test_successful_replan_trace_revision_increments_twice() -> None:
         [
             ReplanProposal(
                 reason="revision one",
-                steps=[PlanStep(id=2, description="second", success_criteria=["done"])],
+                steps=[PlanStep(id=2, description="second", requirement_ids=["R1"], success_criteria=["done"])],
             ),
             ReplanProposal(
                 reason="revision two",
-                steps=[PlanStep(id=3, description="third", success_criteria=["done"])],
+                steps=[PlanStep(id=3, description="third", requirement_ids=["R1"], success_criteria=["done"])],
             ),
         ]
     )

@@ -16,6 +16,7 @@ from taskpilot.models import (
 )
 from taskpilot.observations import collapse_repeated_observations
 from taskpilot.policy import ApprovalRecord, PolicyDecision, redact_preview
+from taskpilot.requirements import build_requirement_contract
 
 
 class ContextBudgetError(ValueError):
@@ -77,11 +78,13 @@ class ContextBuilder:
         core: dict[str, Any] = {
             "task_goal": task_spec.goal,
             "task_constraints": task_spec.constraints,
+            "requirement_contract": build_requirement_contract(task_spec).model_dump(mode="json"),
             "current_step": {
                 "id": step.id,
                 "revision": step.revision,
                 "description": step.description,
                 "success_criteria": step.success_criteria,
+                "requirement_ids": step.requirement_ids,
             },
         }
         if _size(core) > self.config.max_total_chars:
@@ -131,6 +134,27 @@ class ContextBuilder:
         self._add_if_fits(content, "dependency_results", dependencies, truncated)
 
         current_calls = [record for record in tool_calls if record.step_id == step.id]
+        historical_reads = [
+            record for record in tool_calls
+            if record.step_id != step.id
+            and record.reusable_evidence
+            and record.status.value == "success"
+        ]
+        if historical_reads:
+            reuse_facts = []
+            for record in historical_reads[-3:]:
+                observation, truncated_item = _truncate(
+                    record.result, min(self.config.max_single_observation_chars, 2_000)
+                )
+                if truncated_item:
+                    truncated.append(f"historical_read:{record.call_id}")
+                reuse_facts.append({
+                    "source_call_id": record.call_id,
+                    "source_step_id": record.step_id,
+                    "source_tool": record.tool_name,
+                    "observation": observation,
+                })
+            self._add_if_fits(content, "reusable_historical_reads", reuse_facts, truncated)
         reusable_calls, reuse = collapse_repeated_observations(current_calls)
         self._add_if_fits(content, "observation_reuse", reuse, truncated)
         # 浏览器长链路会多次切换 Tab，导致较早页面的正文被最近 6 条工具记录挤掉。
@@ -256,6 +280,8 @@ class ContextBuilder:
             "task_constraints": task_spec.constraints,
             "completion_criteria": task_spec.completion_criteria,
             "replan_trigger": request.trigger.value,
+            "failure_category": request.failure_category,
+            "requirement_contract": build_requirement_contract(task_spec).model_dump(mode="json"),
             "current_plan_revision": plan_revision,
             "replan_count": replan_count,
             "historical_max_step_id": max((step.id for step in plan), default=0),

@@ -510,7 +510,9 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         if verification is not None:
             print(f"task_verified={verification.completed}")
             print(f"verification_reason={verification.reason}")
-    if status_value in {TaskStatus.COMPLETED.value, TaskStatus.FAILED.value}:
+    if status_value in {
+        TaskStatus.COMPLETED.value, TaskStatus.FAILED.value, TaskStatus.PARTIAL.value
+    }:
         final_output = render_final_output(result)
         if final_output is not None:
             print("\nfinal_output:")

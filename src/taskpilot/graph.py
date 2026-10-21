@@ -18,6 +18,7 @@ from taskpilot.analyzer import TaskAnalyzer, TaskAnalyzerLike
 from taskpilot.browser import BrowserLocatorError, is_vision_fallback_eligible
 from taskpilot.config import redact_sensitive_values
 from taskpilot.context import ContextBuilder
+from taskpilot.failure_analysis import diagnose_step_failure
 from taskpilot.executor import (
     MAX_DUPLICATE_OBSERVATION_CORRECTIONS,
     ExecutorRunResult,
@@ -370,7 +371,14 @@ def verify_step(
         )
 
     current_calls = [
-        record for record in state["tool_calls"] if record.step_id == step.id
+        record for record in state["tool_calls"]
+        if record.step_id == step.id
+        or (
+            state.get("plan_revision", 0) > 0
+            and record.step_id != step.id
+            and record.reusable_evidence
+            and record.status is ToolCallStatus.SUCCESS
+        )
     ]
     dependency_results = [
         result for result in state["step_results"] if result.step_id in step.depends_on
@@ -414,16 +422,11 @@ def verify_step(
             ),
         }
     )
-    # 动作上限是 Executor 的硬安全边界。若把它交给 Replanner 创建一个
-    # “新”步骤，就能重新获得一整份额度，既绕过边界也容易重复页面操作。
-    action_limit_reached = bool(
-        not outcome.claimed_complete
-        and outcome.error
-        and outcome.error.startswith("Executor action limit reached:")
-    )
+    # 局部动作上限允许在 Replan 预算内调整策略；全任务累计预算不能绕过。
+    diagnosis = diagnose_step_failure(outcome, result)
     can_replan = (
         reached_limit
-        and not action_limit_reached
+        and diagnosis.can_replan
         and state.get("replan_count", 0) < max_replans
     )
     update: TaskStateUpdate = {
@@ -446,15 +449,18 @@ def verify_step(
                 failed_step_id=step.id,
                 reason=reason,
                 verification_feedback=result.feedback,
+                failure_category=diagnosis.category.value,
             )
             update["error"] = None
         else:
-            if action_limit_reached:
-                update["error"] = f"{reason}; hard action limit, replan disabled"
-            else:
-                update["error"] = (
-                    reason if max_replans == 0 else f"{reason}; replan budget exhausted"
-                )
+            suffix = (
+                "; global action budget exhausted"
+                if not diagnosis.can_replan
+                else "; replan budget exhausted"
+                if max_replans > 0
+                else ""
+            )
+            update["error"] = reason + suffix
     return update
 
 
@@ -776,7 +782,7 @@ async def replan_task(
             replan_count=state.get("replan_count", 0),
         )
         proposal = await asyncio.to_thread(replanner.replan, snapshot)
-        validate_replan_proposal(proposal, state["plan"])
+        validate_replan_proposal(proposal, state["plan"], task_spec)
         next_replan_count = state.get("replan_count", 0) + 1
         if proposal.decision is ReplanDecision.ABORT:
             record = ReplanRecord(
@@ -1017,7 +1023,8 @@ def human_assistance(state: TaskState) -> TaskStateUpdate:
             "pending_human_assistance": None,
             "human_assistance_verification_required": False,
             "status": TaskStatus.FAILED,
-            "error": response.reason or "Human Assistance canceled by user",
+            "error": "Human Assistance canceled by user: "
+            + (response.reason or "canceled"),
         }
     return {
         # 保留 request 直到一次受控环境验证成功，不能只信用户声明。
@@ -1156,8 +1163,17 @@ def finalize_terminal(state: TaskState) -> TaskStateUpdate:
 
     if state["status"] is not TaskStatus.FAILED or state.get("final_answer"):
         return {}
-    return {
-        "final_answer": render_failure_answer(
+    # 只有可合理归类为任务未完全满足的情况才标记 PARTIAL。
+    # Verifier 代码/协议本身崩溃属于基础设施故障，不伪装成任务性降级。
+    error = state.get("error") or ""
+    infrastructure_error = error.startswith((
+        "Task Verifier 调用失败:", "Step Verifier 调用失败:",
+        "Task Analyzer 调用失败:", "Task Planner 调用失败:",
+        "Task Replanner 调用或校验失败:",
+        "Human Assistance canceled by user:",
+    ))
+    has_verified_partial = bool(state.get("step_results")) and not infrastructure_error
+    rendered = render_failure_answer(
             task_spec=state.get("task_spec"),
             plan=state.get("plan", []),
             current_step_id=state.get("current_step_id"),
@@ -1166,6 +1182,11 @@ def finalize_terminal(state: TaskState) -> TaskStateUpdate:
             error=state.get("error"),
             verification=state.get("verification"),
         )
+    if has_verified_partial:
+        rendered = rendered.replace("## 任务未完成", "## 任务部分完成", 1)
+    return {
+        "final_answer": rendered,
+        "status": TaskStatus.PARTIAL if has_verified_partial else TaskStatus.FAILED,
     }
 
 
@@ -1271,6 +1292,7 @@ async def decide_action(
     *,
     executor: TaskExecutor,
     trace_recorder: TraceRecorderLike,
+    max_total_actions: int = 60,
 ) -> TaskStateUpdate:
     """每次 Graph 决策只记录一个 frozen action；空 Tool Call 最多进行一次模型纠偏。"""
 
@@ -1282,6 +1304,19 @@ async def decide_action(
     if index is None:
         return _failed_update(f"decide_action 无法定位唯一当前步骤: {step_id}")
     current_index = state.get("current_action_index", 0)
+    total = state.get("total_action_decisions", 0)
+    if total >= max_total_actions:
+        return {
+            "step_outcome": StepExecutionOutcome(
+                step_id=step_id, claimed_complete=False,
+                action_count=current_index,
+                error=f"Task action budget reached: {max_total_actions}",
+            ),
+            "pending_executor_action": None,
+            "executor_feedback": None,
+            "status": TaskStatus.RUNNING,
+            "error": None,
+        }
     if current_index >= executor.max_actions_per_step:
         return {
             "step_outcome": StepExecutionOutcome(
@@ -1399,6 +1434,7 @@ async def decide_action(
             )
             return {
                 "current_action_index": action_index,
+                "total_action_decisions": total + 1,
                 "duplicate_observation_corrections": corrections,
                 "executor_feedback": result.correction_feedback,
                 "step_outcome": StepExecutionOutcome(
@@ -1413,6 +1449,7 @@ async def decide_action(
             }
         return {
             "current_action_index": action_index,
+            "total_action_decisions": total + 1,
             "duplicate_observation_corrections": corrections,
             "executor_feedback": result.correction_feedback,
             "pending_executor_action": None,
@@ -1424,6 +1461,7 @@ async def decide_action(
         error = result.error or "Executor decision 未返回 action"
         return {
             "current_action_index": action_index,
+            "total_action_decisions": total + 1,
             "step_outcome": StepExecutionOutcome(
                 step_id=step_id,
                 claimed_complete=False,
@@ -1467,6 +1505,7 @@ async def decide_action(
             }
     return {
         "current_action_index": action_index,
+        "total_action_decisions": total + 1,
         "pending_executor_action": action,
         "pending_action": None,
         "executor_feedback": None,
@@ -1693,6 +1732,8 @@ def _journal_identity_error(
 def _materialize_tool_call(
     state: TaskState,
     record: ActionJournalRecord,
+    *,
+    reusable_evidence: bool = False,
 ) -> TaskStateUpdate:
     action = state["pending_executor_action"]
     assert action is not None and action.tool_name is not None
@@ -1708,6 +1749,11 @@ def _materialize_tool_call(
         ),
         result=record.result,
         error=record.error,
+        reusable_evidence=(
+            reusable_evidence
+            and record.replay_safe
+            and record.status is JournalStatus.SUCCEEDED
+        ),
     )
     existing = [
         item
@@ -1884,7 +1930,9 @@ async def execute_tool_action(
                 status=record.status.value,
                 payload={"tool_name": action.tool_name},
             )
-            return _materialize_tool_call(state, record)
+            return _materialize_tool_call(
+            state, record, reusable_evidence=executor.is_reusable_evidence(action)
+        )
         authorized_attempt = record.attempt_count + 1
         has_one_shot_permit = record.authorized_retry_attempt == authorized_attempt
         # STARTED 不是“没执行”的证明；非幂等动作必须获得人工一次性重试授权。
@@ -2001,7 +2049,9 @@ async def execute_tool_action(
         ExecutionFaultPoint.AFTER_TERMINAL_JOURNAL_BEFORE_GRAPH_RETURN,
         action_key,
     )
-    return _materialize_tool_call(state, record)
+    return _materialize_tool_call(
+        state, record, reusable_evidence=executor.is_reusable_evidence(action)
+    )
 
 
 def _vision_trace_payload(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -2477,6 +2527,7 @@ def _route_after_human_assistance(state: TaskState) -> Literal["decide_action", 
 
 def _build_action_level_graph(
     *,
+    max_total_actions: int,
     analyzer: TaskAnalyzerLike,
     planner: TaskPlannerLike,
     executor: TaskExecutor,
@@ -2517,7 +2568,10 @@ def _build_action_level_graph(
     )
     builder.add_node(
         "decide_action",
-        partial(decide_action, executor=executor, trace_recorder=trace_recorder),
+        partial(
+            decide_action, executor=executor, trace_recorder=trace_recorder,
+            max_total_actions=max_total_actions,
+        ),
     )
     builder.add_node(
         "assess_policy",
@@ -2710,6 +2764,7 @@ def build_graph(
     executor: TaskExecutorLike | None = None,
     verifier: TaskVerifierLike | None = None,
     max_step_attempts: int = 3,
+    max_total_actions: int = 60,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
     action_journal: ActionJournalLike | None = None,
     fault_injector: ExecutionFaultInjector | None = None,
@@ -2724,6 +2779,8 @@ def build_graph(
 
     if max_step_attempts < 1:
         raise ValueError("max_step_attempts 必须至少为 1")
+    if max_total_actions < 1:
+        raise ValueError("max_total_actions 必须至少为 1")
     if max_replans < 0:
         raise ValueError("max_replans 必须大于等于 0")
     if max_human_assists < 0:
@@ -2734,6 +2791,7 @@ def build_graph(
     active_verifier = verifier if verifier is not None else TaskVerifier()
     if isinstance(active_executor, TaskExecutor):
         return _build_action_level_graph(
+            max_total_actions=max_total_actions,
             analyzer=active_analyzer,
             planner=active_planner,
             executor=active_executor,

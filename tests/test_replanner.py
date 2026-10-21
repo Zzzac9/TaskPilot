@@ -178,3 +178,26 @@ def test_replan_model_mutable_defaults_are_isolated() -> None:
     record_b = ReplanRecord(revision=1, trigger=first.trigger, reason="b")
     record_a.new_step_ids.append(4)
     assert record_b.new_step_ids == []
+
+
+
+def test_replan_cannot_create_untraceable_requirement_or_lose_required_goal() -> None:
+    from taskpilot.models import TaskSpec
+
+    spec = TaskSpec(
+        goal="Return two real results",
+        completion_criteria=["two entries", "grounded citations"],
+        optional_criteria=["independent detail link if available"],
+    )
+    old = historical(PlanStepStatus.FAILED)
+    with pytest.raises(ValueError, match="Requirement ID"):
+        validate_replan_proposal(
+            proposal(new_step(requirement_ids=["R999"])), old, spec
+        )
+    with pytest.raises(ValueError, match="丢失用户必需条件"):
+        validate_replan_proposal(
+            proposal(new_step(requirement_ids=["R1", "O1"])), old, spec
+        )
+    validate_replan_proposal(
+        proposal(new_step(requirement_ids=["R1", "R2"])), old, spec
+    )
