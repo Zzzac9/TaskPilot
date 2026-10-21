@@ -6,6 +6,7 @@ import json
 import signal
 import sys
 import threading
+from time import perf_counter
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -51,6 +52,36 @@ def _progress_detail(value: Any, *, max_chars: int = 240) -> str:
     return detail if len(detail) <= max_chars else detail[:max_chars] + "…"
 
 
+def _render_plan_steps(steps: Any) -> str:
+    """把脱敏的结构化计划展示为可读步骤，避免异常长文本冲刷控制台。"""
+
+    if not isinstance(steps, list) or not steps:
+        return ""
+    lines: list[str] = []
+    for item in steps:
+        if not isinstance(item, dict):
+            continue
+        step_id = item.get("id")
+        description = _progress_detail(item.get("description"), max_chars=500)
+        dependencies = item.get("depends_on")
+        ids = ", ".join(str(value) for value in dependencies) if isinstance(dependencies, list) else ""
+        requirements = item.get("requirement_ids")
+        sources = ", ".join(str(value) for value in requirements) if isinstance(requirements, list) else ""
+        line = f"  {step_id}. {description}"
+        if ids:
+            line += f"（依赖步骤：{ids}）"
+        if sources:
+            line += f" [要求：{sources}]"
+        lines.append(line)
+        criteria = item.get("success_criteria")
+        if isinstance(criteria, list) and criteria:
+            formatted = "；".join(
+                _progress_detail(value, max_chars=300) for value in criteria
+            )
+            lines.append(f"     完成标准：{formatted}")
+    return "\n" + "\n".join(lines) if lines else ""
+
+
 def render_progress_event(event: TraceEvent) -> str | None:
     """把已脱敏 Trace 转成紧凑进度；执行完成声明不冒充验证通过。"""
 
@@ -67,11 +98,17 @@ def render_progress_event(event: TraceEvent) -> str | None:
     if event.event_type is TraceEventType.TASK_ANALYZED:
         return f"{prefix} task analysis {event.status}{latency}"
     if event.event_type is TraceEventType.PLAN_CREATED:
-        return (
+        heading = (
             f"{prefix} plan ready steps={len(payload.get('step_ids') or [])}{latency}"
         )
+        return heading + _render_plan_steps(payload.get("steps"))
     if event.event_type is TraceEventType.PLAN_REPLANNED:
-        return f"{prefix} plan revised status={event.status}{latency}"
+        heading = f"{prefix} plan revised status={event.status}{latency}"
+        return heading + (
+            _render_plan_steps(payload.get("steps"))
+            if event.status == "success"
+            else ""
+        )
     if event.event_type is TraceEventType.STEP_STARTED:
         position = payload.get("step_position")
         total = payload.get("step_total")
@@ -271,7 +308,7 @@ async def interactive_shell(args: argparse.Namespace) -> int:
         print()
 
 
-async def async_main(argv: Sequence[str] | None = None) -> int:
+async def _async_main_impl(argv: Sequence[str] | None = None) -> int:
     """在可选 MCP/Browser 生命周期内异步运行一次 TaskPilot Graph。"""
 
     parser = argparse.ArgumentParser(description="Run the TaskPilot graph.")
@@ -524,6 +561,22 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     if step_outcome is not None and step_outcome.error:
         return 1
     return 0
+
+async def async_main(argv: Sequence[str] | None = None) -> int:
+    """为一次 CLI 任务计时；交互 Shell 只给每个子任务计时。"""
+
+    effective_argv = sys.argv[1:] if argv is None else argv
+    if "--interactive" in effective_argv or "-i" in effective_argv:
+        return await _async_main_impl(argv)
+
+    started_at = perf_counter()
+    try:
+        return await _async_main_impl(argv)
+    finally:
+        label = "本次恢复耗时" if "--resume" in effective_argv else "任务总耗时"
+        print(f"{label}：{perf_counter() - started_at:.2f} 秒", flush=True)
+
+
 
 
 def main(argv: Sequence[str] | None = None) -> int:

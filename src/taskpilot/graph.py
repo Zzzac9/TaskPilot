@@ -697,6 +697,17 @@ async def plan_task_traced(
         latency_ms=latency,
         payload={
             "step_ids": [step.id for step in update.get("plan", [])],
+            # 保存结构化计划，Trace 层脱敏后再发到 CLI。
+            "steps": [
+                {
+                    "id": step.id,
+                    "description": step.description,
+                    "depends_on": step.depends_on,
+                    "success_criteria": step.success_criteria,
+                    "requirement_ids": step.requirement_ids,
+                }
+                for step in update.get("plan", [])
+            ],
             **({"error": update.get("error")} if failed else {}),
         },
     )
@@ -971,6 +982,16 @@ async def replan_task(
             "replaced_step_ids": replaced_ids,
             "new_revision": next_revision,
             "new_step_ids": record.new_step_ids,
+            "steps": [
+                {
+                    "id": step.id,
+                    "description": step.description,
+                    "depends_on": step.depends_on,
+                    "success_criteria": step.success_criteria,
+                    "requirement_ids": step.requirement_ids,
+                }
+                for step in new_steps
+            ],
             "context_chars": snapshot.total_chars,
         },
     )
