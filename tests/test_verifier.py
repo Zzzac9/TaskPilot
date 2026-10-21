@@ -193,3 +193,12 @@ def test_verifier_prompts_preserve_phase_5_boundaries() -> None:
     assert "所有 PlanStep 已完成并不自动表示 Task 成功" in (TASK_VERIFIER_SYSTEM_PROMPT)
     assert "已经验证的 StepResults" in TASK_VERIFIER_SYSTEM_PROMPT
     assert "不得使用未验证的 Executor claim" in TASK_VERIFIER_SYSTEM_PROMPT
+
+
+
+def test_verifier_prompt_allows_listing_source_only_with_matching_evidence() -> None:
+    """官网列表页如明确出现岗位，可作为两岗位的共同来源；仍需逐项验证证据。"""
+    from taskpilot.verifier import STEP_VERIFIER_SYSTEM_PROMPT
+
+    assert "可以接受该列表页 URL 作为这些条目的共同来源" in STEP_VERIFIER_SYSTEM_PROMPT
+    assert "不能对欠缺证据的条目放行" in STEP_VERIFIER_SYSTEM_PROMPT

@@ -373,3 +373,11 @@ def test_planner_prompt_preserves_planning_boundary() -> None:
     assert "success_criteria" in PLANNER_SYSTEM_PROMPT
     assert "不得添加 TaskSpec 中不存在的硬约束" in PLANNER_SYSTEM_PROMPT
     assert "不得虚构" in PLANNER_SYSTEM_PROMPT
+
+
+def test_planner_prompt_does_not_invent_job_details_for_listing_requests() -> None:
+    """用户只要岗位列表，不能把详情职责和方向下拉变成强制成功条件。"""
+    from taskpilot.planner import PLANNER_SYSTEM_PROMPT
+
+    assert "不得擅自升级为必须展开岗位详情" in PLANNER_SYSTEM_PROMPT
+    assert "都应能直接追溯到 TaskSpec" in PLANNER_SYSTEM_PROMPT
