@@ -181,5 +181,61 @@ async def test_interactive_shell_handles_ctrl_c_at_prompt_cleanly(
     run_once = AsyncMock()
     monkeypatch.setattr(cli, "async_main", run_once)
 
-    assert await cli.interactive_shell(shell_args()) == 0
+    assert await cli.interactive_shell(shell_args()) == 130
     run_once.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ctrl_c_while_task_running_exits_shell_not_next_task(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """执行任务时按 Ctrl+C，直接退出整个 Shell，不继续读取下一条任务。"""
+    user_inputs: list[str] = ["首个任务", "不该被执行的任务"]
+    def next_input(prompt: str = "") -> str:
+        return user_inputs.pop(0)
+
+    monkeypatch.setattr("builtins.input", next_input)
+    run_once = AsyncMock(side_effect=KeyboardInterrupt)
+    monkeypatch.setattr(cli, "async_main", run_once)
+
+    assert await cli.interactive_shell(shell_args()) == 130
+    assert run_once.await_count == 1
+    assert user_inputs == ["不该被执行的任务"]
+    assert "已退出 TaskPilot" in capsys.readouterr().out
+
+
+def test_main_handles_ctrl_c_during_asyncio_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """模拟运行中的任务被 SIGINT 取消：顶层必须吞掉异常堆栈并退出。"""
+    def interrupted_run(coro: object) -> None:
+        coro.close()
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli.asyncio, "run", interrupted_run)
+
+    assert cli.main([]) == 130
+    assert "已退出 TaskPilot" in capsys.readouterr().out
+
+
+
+def test_console_input_restores_original_sigint_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """控制台输入完成或收到 KeyboardInterrupt 时均需恢复 asyncio 的 SIGINT handler。"""
+    import signal
+
+    previous = signal.getsignal(signal.SIGINT)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "hello")
+    assert cli._console_input("taskpilot> ") == "hello"
+    assert signal.getsignal(signal.SIGINT) is previous
+
+    def interrupted(prompt: str = "") -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        cli._console_input("taskpilot> ")
+    assert signal.getsignal(signal.SIGINT) is previous

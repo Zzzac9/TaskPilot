@@ -3,7 +3,9 @@
 import argparse
 import asyncio
 import json
+import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -212,19 +214,41 @@ def startup_banner(args: argparse.Namespace) -> str:
 ----------------------------------------------------""".strip("\n")
 
 
+def _console_input(prompt: str) -> str:
+    """同步读取 CLI 输入，并在等待输入时允许一次 Ctrl+C 立即退出。
+
+    asyncio.run 默认的 SIGINT handler 只标记取消 coroutine；如果此时
+    input() 正阻塞主线程，任务取消不会立即执行。仅在输入期间恢复
+    Python 默认 SIGINT 行为，结束后还原原 handler，不影响执行期清理。
+    """
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    previous_handler = signal.getsignal(signal.SIGINT) if is_main_thread else None
+    if is_main_thread:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        return input(prompt)
+    finally:
+        if is_main_thread:
+            signal.signal(signal.SIGINT, previous_handler)
+
+
 async def interactive_shell(args: argparse.Namespace) -> int:
     """常驻读取多个独立任务；每条任务沿用同一组 Host 能力参数。"""
 
     print(startup_banner(args))
-    print("输入任务并回车；输入 /help 查看帮助，/exit 退出。")
+    print("输入任务并回车；输入 /help 查看帮助，/exit 或 Ctrl+C 退出。")
     while True:
         try:
             # Shell 在此刻没有并行任务：直接读取标准输入，使 Ctrl+C 可在本层捕获。
             # asyncio.to_thread(input) 在 asyncio.run 收到 Ctrl+C 时容易产生 CancelledError traceback。
-            raw = input("taskpilot> ")
-        except (EOFError, KeyboardInterrupt):
+            raw = _console_input("taskpilot> ")
+        except EOFError:
             print()
             return 0
+        except KeyboardInterrupt:
+            # Ctrl+C 始终是退出整个 CLI，不是回到下一轮输入。
+            print("\n已退出 TaskPilot。")
+            return 130
         task = raw.strip()
         if not task:
             continue
@@ -237,7 +261,9 @@ async def interactive_shell(args: argparse.Namespace) -> int:
         try:
             await async_main(interactive_task_argv(args, task))
         except KeyboardInterrupt:
-            print("\n当前任务已中断，交互 Shell 继续运行。")
+            # 当前任务同步收到 Ctrl+C 时也必须退出 Shell，不能继续等待任务输入。
+            print("\n已退出 TaskPilot。")
+            return 130
         except Exception as exc:
             detail = redact_sensitive_values(str(exc))
             print(f"task_error={type(exc).__name__}: {detail}")
@@ -380,7 +406,8 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             print(f"approval_risk={payload['risk_level']}")
-            answer = await asyncio.to_thread(input, "Approve? [y/N] ")
+            # 直接读取：Ctrl+C 能终止整个交互 CLI，而非遗留一个等待输入的线程。
+            answer = _console_input("Approve? [y/N] ")
             resume = (
                 {"decision": "approve"}
                 if answer.strip().lower() == "y"
@@ -396,10 +423,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
                     sort_keys=True,
                 )
             )
-            answer = await asyncio.to_thread(
-                input,
-                "Action may already have run. Retry anyway? [y/N] ",
-            )
+            answer = _console_input("Action may already have run. Retry anyway? [y/N] ")
             resume = (
                 {"choice": "retry", "reason": "Retry accepted from CLI"}
                 if answer.strip().lower() == "y"
@@ -408,10 +432,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
         elif payload["type"] == "human_assistance":
             print(f"required_action={payload.get('required_action')}")
             print(f"resume_condition={payload.get('resume_condition')}")
-            answer = await asyncio.to_thread(
-                input,
-                "完成上述操作并准备让 TaskPilot 重新验证了吗？ [y/N] ",
-            )
+            answer = _console_input("完成上述操作并准备让 TaskPilot 重新验证了吗？ [y/N] ")
             resume = (
                 {"choice": "completed", "reason": "Completed from CLI"}
                 if answer.strip().lower() == "y"
@@ -507,7 +528,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI 顶层创建一次事件循环；Graph node 内不会创建 event loop。"""
 
     configure_console_encoding()
-    return asyncio.run(async_main(argv))
+    try:
+        return asyncio.run(async_main(argv))
+    except KeyboardInterrupt:
+        # asyncio.run 取消执行中的 Graph 后会在最外层重抛 KeyboardInterrupt。
+        # 这里统一收尾，避免用户主动 Ctrl+C 时出现一整屏异常堆栈。
+        print("\n已退出 TaskPilot。")
+        return 130
 
 
 if __name__ == "__main__":
