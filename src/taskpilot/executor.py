@@ -319,8 +319,15 @@ class TaskExecutor:
         if self._model is None:
             self._model = create_chat_model()
         schemas = self._registry.list_function_schemas() + [FINISH_STEP_SCHEMA]
+        # 明确当前预算，帮助模型优先复用页面证据；不允许因预算不足伪造完成声明。
+        budget_hint = (
+            f"当前是本步骤第 {action_index}/{self._max_actions_per_step} 次动作决策。"
+            "此前执行的所有事实都在 Context 中。若已有充分证据，应立即调用 "
+            "finish_step；否则仅执行能带来新信息的动作，避免反复切换或观察已读页面。"
+            "即使剩余预算不足，也禁止编造 evidence。"
+        )
         messages: list[BaseMessage] = [
-            SystemMessage(content=EXECUTOR_SYSTEM_PROMPT),
+            SystemMessage(content=EXECUTOR_SYSTEM_PROMPT + "\n" + budget_hint),
             HumanMessage(
                 content=json.dumps(snapshot.content, ensure_ascii=False, default=str)
             ),

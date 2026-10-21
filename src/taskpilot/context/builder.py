@@ -133,6 +133,15 @@ class ContextBuilder:
         current_calls = [record for record in tool_calls if record.step_id == step.id]
         reusable_calls, reuse = collapse_repeated_observations(current_calls)
         self._add_if_fits(content, "observation_reuse", reuse, truncated)
+        # 浏览器长链路会多次切换 Tab，导致较早页面的正文被最近 6 条工具记录挤掉。
+        # 仅从 durable ToolCallRecord 复用已有原文（不是摘要或验证结论），且限长、
+        # 限页数；保留 source_call_id，使模型仍能识别证据出处。
+        if len(current_calls) > self.config.max_recent_tool_calls:
+            browser_evidence = self._recent_browser_evidence(current_calls)
+            if browser_evidence:
+                self._add_if_fits(
+                    content, "browser_page_evidence_reuse", browser_evidence, truncated
+                )
         selected = reusable_calls[-self.config.max_recent_tool_calls :]
         if self.config.max_recent_tool_calls == 0:
             selected = []
@@ -179,6 +188,41 @@ class ContextBuilder:
             omitted_tool_calls=len(current_calls) - included,
             truncated_sections=list(dict.fromkeys(truncated)),
         )
+
+    @staticmethod
+    def _recent_browser_evidence(
+        calls: Sequence[ToolCallRecord],
+    ) -> list[dict[str, Any]]:
+        """保留最近两个不同页面的原始正文片段，避免来回切页才能找回旧证据。"""
+
+        by_page: dict[str, dict[str, Any]] = {}
+        for record in reversed(calls):
+            if len(by_page) >= 2:
+                break
+            if record.status.value != "success" or not isinstance(record.result, dict):
+                continue
+            if record.tool_name == "browser_extract_text":
+                field = "text"
+            elif record.tool_name == "browser_observe":
+                field = "aria_snapshot"
+            else:
+                continue
+            page_id = record.result.get("page_id")
+            raw = record.result.get(field)
+            if not isinstance(page_id, str) or not page_id or not isinstance(raw, str) or not raw.strip():
+                continue
+            if page_id in by_page:
+                continue
+            # 只复制既有事实，长内容标记为截断，不推断没有看到的页面部分。
+            limit = 1_500
+            by_page[page_id] = {
+                "page_id": page_id,
+                "source_call_id": record.call_id,
+                "source_tool": record.tool_name,
+                "raw_excerpt": raw[:limit],
+                "truncated": len(raw) > limit,
+            }
+        return list(reversed(list(by_page.values())))
 
     def build_replan_context(
         self,

@@ -192,6 +192,7 @@ async def test_decide_action_retries_empty_tool_call_once_without_tool_side_effe
     assert result.action.call_id == "retry-finish"
     assert result.action.action_type.value == "finish_step"
     assert len(model.invocations) == 2
+    assert "第 1/10 次动作决策" in model.invocations[0][0].content
     assert len(model.invocations[1]) == len(model.invocations[0]) + 1
     assert "上一轮没有返回 Tool Call" in str(model.invocations[1][-1].content)
 

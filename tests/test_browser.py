@@ -53,6 +53,72 @@ def test_download_filename_sanitization_blocks_path_traversal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_pages_handles_popup_or_close_during_title_await() -> None:
+    """title() 期间出现新页并关闭旧页，不应报 dictionary changed size。"""
+    from taskpilot.browser.session import BrowserSession
+
+    session = BrowserSession(_browser_config())
+
+    class FakePage:
+        def __init__(self, name: str, on_title: Any = None) -> None:
+            self.name = name
+            self.url = f"https://example.test/{name}"
+            self.closed = False
+            self.on_title = on_title
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+        async def title(self) -> str:
+            if self.on_title is not None:
+                callback, self.on_title = self.on_title, None
+                callback()
+            return self.name
+
+    old = FakePage("old")
+    fresh = FakePage("fresh")
+
+    def mutate_pages() -> None:
+        old.closed = True
+        session._pages.pop("page-2")
+        session._pages["page-3"] = fresh
+
+    first = FakePage("first", on_title=mutate_pages)
+    session._pages.update({"page-1": first, "page-2": old})
+    session.active_page_id = "page-1"
+
+    first_result = await session.list_pages()
+    assert [item["page_id"] for item in first_result] == ["page-1"]
+    assert [item["page_id"] for item in await session.list_pages()] == [
+        "page-1", "page-3"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_pages_skips_page_closed_while_waiting_for_title() -> None:
+    """目标标签页关闭导致 title() 异常时，不应把整次工具执行判为失败。"""
+    from playwright.async_api import Error as PlaywrightError
+    from taskpilot.browser.session import BrowserSession
+
+    session = BrowserSession(_browser_config())
+
+    class ClosedDuringTitle:
+        url = "https://example.test/closed"
+        closed = False
+
+        def is_closed(self) -> bool:
+            return self.closed
+
+        async def title(self) -> str:
+            self.closed = True
+            session._pages.pop("page-1")
+            raise PlaywrightError("Target page, context or browser has been closed")
+
+    session._pages["page-1"] = ClosedDuringTitle()
+    assert await session.list_pages() == []
+
+
+@pytest.mark.asyncio
 async def test_browser_runtime_recreation_reobserves_environment_not_live_dom(
     browser_site_url: str,
 ) -> None:

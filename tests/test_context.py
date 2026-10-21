@@ -66,6 +66,41 @@ def test_context_only_includes_latest_tool_calls() -> None:
     assert snapshot.omitted_tool_calls == 3
 
 
+def test_long_browser_chain_preserves_evidence_from_two_pages_without_inventing_facts() -> None:
+    """即使近期多次切页，保留可追溯的原始页面文本，避免 Agent 反复返回旧 Tab。"""
+    calls = [
+        ToolCallRecord(
+            call_id=f"evidence-{page}",
+            step_id=3,
+            tool_name="browser_extract_text",
+            status=ToolCallStatus.SUCCESS,
+            result={"page_id": page, "text": text},
+        )
+        for page, text in (("page-2", "岗位 A 招聘信息"), ("page-4", "岗位 B 详情"))
+    ]
+    calls.extend(
+        ToolCallRecord(
+            call_id=f"switch-{n}",
+            step_id=3,
+            tool_name="browser_switch_page",
+            status=ToolCallStatus.SUCCESS,
+            result={"page_id": "page-2" if n % 2 else "page-4"},
+        )
+        for n in range(7)
+    )
+    builder = ContextBuilder(ContextConfig(max_recent_tool_calls=3))
+    before = [c.model_dump_json() for c in calls]
+    snapshot = builder.build_executor_context(
+        task_spec=spec(), step=step(), task_results={}, tool_calls=calls
+    )
+    evidence = snapshot.content["browser_page_evidence_reuse"]
+    assert {x["source_call_id"] for x in evidence} == {"evidence-page-2", "evidence-page-4"}
+    assert "岗位 A 招聘信息" in json.dumps(evidence, ensure_ascii=False)
+    assert "岗位 B 详情" in json.dumps(evidence, ensure_ascii=False)
+    assert before == [c.model_dump_json() for c in calls]
+    assert snapshot.total_chars <= builder.config.max_total_chars
+
+
 def test_context_collapses_identical_consecutive_browser_observations() -> None:
     result = {
         "page_id": "page-1",

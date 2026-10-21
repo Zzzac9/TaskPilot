@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import Browser, BrowserContext, Error as PlaywrightError, Page, Playwright, async_playwright
 
 from taskpilot.browser.config import BrowserConfig
 
@@ -144,14 +144,27 @@ class BrowserSession:
         """只返回 JSON-serializable 页面元数据。"""
 
         result: list[dict[str, Any]] = []
-        for page_id, page in self._pages.items():
-            if page.is_closed():
+        # page.title() 会让出事件循环，Playwright 的 page/close 回调可能同时
+        # 向 _pages 添加或删除标签页。先冻结本轮遍历集合，避免字典变更异常。
+        for page_id, page in tuple(self._pages.items()):
+            if page.is_closed() or self._pages.get(page_id) is not page:
+                continue
+            try:
+                title = await page.title()
+            except PlaywrightError:
+                # 新窗口打开时旧窗口可能恰好关闭；只有已失效的 Page 可以忽略。
+                # 对真实存活页面的 Playwright 错误继续抛出，不能伪装成功。
+                if page.is_closed() or self._pages.get(page_id) is not page:
+                    continue
+                raise
+            # title() 执行期间页面可能关闭，不把已失效的 page_id 返回给模型。
+            if page.is_closed() or self._pages.get(page_id) is not page:
                 continue
             result.append(
                 {
                     "page_id": page_id,
                     "active": page_id == self.active_page_id,
-                    "title": await page.title(),
+                    "title": title,
                     "url": page.url,
                 }
             )
