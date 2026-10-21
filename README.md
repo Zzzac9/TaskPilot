@@ -216,7 +216,7 @@ Vision-model ablation 为 **NOT RUN**；没有 token reduction claim。
 项目要求 Python 3.11 或更高版本。
 
 ```powershell
-python -m pip install -e .
+python -m pip install -e ".[dev]"  # 开发/测试环境；普通运行只需 pip install -e .
 python -m playwright install chromium
 pytest
 $env:LLM_API_KEY = "your-api-key"

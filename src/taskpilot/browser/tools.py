@@ -109,6 +109,11 @@ def _object_schema(
     }
 
 
+def _browser_metadata(risk: str, replay_safe: bool) -> dict[str, Any]:
+    """为每个工具创建独立元数据；replay_safe 是 Host 的安全承诺，不由模型决定。"""
+    return {"source": "browser", "risk": risk, "replay_safe": replay_safe}
+
+
 class BrowserTools:
     """BrowserSession 上的 JSON-serializable Tool handlers。"""
 
@@ -131,6 +136,8 @@ class BrowserTools:
         return self.vision_config.enabled and self.vision_targeter is not None
 
     def build(self) -> list[BrowserTool]:
+        """注册浏览器工具的公开描述、参数约束与 Host 风险元数据。"""
+        # Schema 告诉模型如何提参；真正的风险判定和审批仍在执行边界进行。
         # 可选 page_id 由模型留成 "" 时等价于省略并使用 active page。
         # 只有 browser_switch_page 的必填目标仍禁止空字符串。
         page_id = {
@@ -148,7 +155,7 @@ class BrowserTools:
                     ["url"],
                 ),
                 self.navigate,
-                metadata={"source": "browser", "risk": "low", "replay_safe": True},
+                metadata=_browser_metadata("low", True),
             ),
             BrowserTool(
                 "browser_observe",
@@ -160,7 +167,7 @@ class BrowserTools:
                     }
                 ),
                 self.observe,
-                metadata={"source": "browser", "risk": "low", "replay_safe": True},
+                metadata=_browser_metadata("low", True),
             ),
             BrowserTool(
                 "browser_click",
@@ -180,7 +187,7 @@ class BrowserTools:
                     ["locator"],
                 ),
                 self.click,
-                metadata={"source": "browser", "risk": "dynamic", "replay_safe": False},
+                metadata=_browser_metadata("dynamic", False),
                 _preflight=self.inspect_click,
             ),
             BrowserTool(
@@ -195,7 +202,7 @@ class BrowserTools:
                     ["locator", "value"],
                 ),
                 self.fill,
-                metadata={"source": "browser", "risk": "medium", "replay_safe": True},
+                metadata=_browser_metadata("medium", True),
             ),
             BrowserTool(
                 "browser_press",
@@ -213,7 +220,7 @@ class BrowserTools:
                     ["locator", "key"],
                 ),
                 self.press,
-                metadata={"source": "browser", "risk": "dynamic", "replay_safe": False},
+                metadata=_browser_metadata("dynamic", False),
                 _preflight=self.inspect_press,
             ),
             BrowserTool(
@@ -228,7 +235,7 @@ class BrowserTools:
                     ["locator", "value"],
                 ),
                 self.select,
-                metadata={"source": "browser", "risk": "medium", "replay_safe": True},
+                metadata=_browser_metadata("medium", True),
             ),
             BrowserTool(
                 "browser_check",
@@ -238,7 +245,7 @@ class BrowserTools:
                     ["locator"],
                 ),
                 self.check,
-                metadata={"source": "browser", "risk": "medium", "replay_safe": True},
+                metadata=_browser_metadata("medium", True),
             ),
             BrowserTool(
                 "browser_extract_text",
@@ -251,21 +258,21 @@ class BrowserTools:
                     }
                 ),
                 self.extract_text,
-                metadata={"source": "browser", "risk": "low", "replay_safe": True},
+                metadata=_browser_metadata("low", True),
             ),
             BrowserTool(
                 "browser_list_pages",
                 "List stable page IDs with active state, title and URL.",
                 _object_schema({}),
                 self.list_pages,
-                metadata={"source": "browser", "risk": "low", "replay_safe": True},
+                metadata=_browser_metadata("low", True),
             ),
             BrowserTool(
                 "browser_switch_page",
                 "Switch the active page using a stable page_id.",
                 _object_schema({"page_id": required_page_id}, ["page_id"]),
                 self.switch_page,
-                metadata={"source": "browser", "risk": "low", "replay_safe": False},
+                metadata=_browser_metadata("low", False),
             ),
             BrowserTool(
                 "browser_download",
@@ -275,7 +282,7 @@ class BrowserTools:
                     ["locator"],
                 ),
                 self.download,
-                metadata={"source": "browser", "risk": "medium", "replay_safe": False},
+                metadata=_browser_metadata("medium", False),
             ),
             BrowserTool(
                 "browser_screenshot",
@@ -291,7 +298,7 @@ class BrowserTools:
                     }
                 ),
                 self.screenshot,
-                metadata={"source": "browser", "risk": "medium", "replay_safe": False},
+                metadata=_browser_metadata("medium", False),
             ),
         ]
 

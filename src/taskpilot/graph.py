@@ -29,6 +29,7 @@ from taskpilot.finalizer import (
     VerifiedResultsRenderer,
     render_failure_answer,
 )
+from taskpilot.graph_legacy import build_legacy_graph
 from taskpilot.models import (
     ExecutionBlocker,
     ExecutionBlockerCategory,
@@ -1240,114 +1241,6 @@ def _route_after_terminal_verification(
     return "failure" if state["status"] is TaskStatus.FAILED else "end"
 
 
-def _build_legacy_graph(
-    analyzer: TaskAnalyzerLike | None = None,
-    planner: TaskPlannerLike | None = None,
-    executor: TaskExecutorLike | None = None,
-    verifier: TaskVerifierLike | None = None,
-    max_step_attempts: int = 3,
-    checkpointer: BaseCheckpointSaver[Any] | None = None,
-) -> CompiledStateGraph:
-    """构建带 Policy/HITL、两层验证和有限重试的状态图。"""
-
-    if max_step_attempts < 1:
-        raise ValueError("max_step_attempts 必须至少为 1")
-    active_analyzer = analyzer if analyzer is not None else TaskAnalyzer()
-    active_planner = planner if planner is not None else TaskPlanner()
-    active_executor = (
-        executor if executor is not None else TaskExecutor(registry=ToolRegistry())
-    )
-    active_verifier = verifier if verifier is not None else TaskVerifier()
-
-    builder = StateGraph(TaskState)
-    builder.add_node("initialize_task", initialize_task)
-    builder.add_node(
-        "analyze_task",
-        partial(analyze_task, analyzer=active_analyzer),
-    )
-    builder.add_node("plan_task", partial(plan_task, planner=active_planner))
-    builder.add_node(
-        "execute_step",
-        partial(execute_step, executor=active_executor),
-    )
-    builder.add_node("prepare_approval", prepare_approval)
-    builder.add_node("human_approval", human_approval)
-    builder.add_node(
-        "execute_approved_action",
-        partial(execute_approved_action, executor=active_executor),
-    )
-    builder.add_node("handle_rejection", handle_rejection)
-    builder.add_node(
-        "verify_step",
-        partial(
-            verify_step,
-            verifier=active_verifier,
-            max_step_attempts=max_step_attempts,
-        ),
-    )
-    builder.add_node("advance_step", advance_step)
-    builder.add_node(
-        "verify_task",
-        partial(verify_task, verifier=active_verifier),
-    )
-    builder.add_node("finalize_terminal", finalize_terminal)
-
-    builder.add_edge(START, "initialize_task")
-    builder.add_edge("initialize_task", "analyze_task")
-    builder.add_edge("analyze_task", "plan_task")
-    builder.add_conditional_edges(
-        "plan_task",
-        _route_after_plan,
-        {"execute_step": "execute_step", "end": "finalize_terminal"},
-    )
-    builder.add_conditional_edges(
-        "execute_step",
-        _route_after_execute,
-        {
-            "prepare_approval": "prepare_approval",
-            "verify_step": "verify_step",
-            "end": "finalize_terminal",
-        },
-    )
-    builder.add_edge("prepare_approval", "human_approval")
-    builder.add_conditional_edges(
-        "human_approval",
-        _route_after_human_approval,
-        {
-            "execute_approved_action": "execute_approved_action",
-            "handle_rejection": "handle_rejection",
-            "end": "finalize_terminal",
-        },
-    )
-    builder.add_edge("execute_approved_action", "execute_step")
-    builder.add_edge("handle_rejection", "execute_step")
-    builder.add_conditional_edges(
-        "verify_step",
-        _route_after_step_verification,
-        {
-            "advance_step": "advance_step",
-            "execute_step": "execute_step",
-            "end": "finalize_terminal",
-        },
-    )
-    builder.add_conditional_edges(
-        "advance_step",
-        _route_after_advance,
-        {
-            "execute_step": "execute_step",
-            "verify_task": "verify_task",
-            "end": "finalize_terminal",
-        },
-    )
-    builder.add_conditional_edges(
-        "verify_task",
-        _route_after_terminal_verification,
-        {"failure": "finalize_terminal", "end": END},
-    )
-    builder.add_edge("finalize_terminal", END)
-    return builder.compile(checkpointer=checkpointer)
-
-
 def begin_step(state: TaskState) -> TaskStateUpdate:
     """进入新 Step，并为本次 verification attempt 初始化 action counter。"""
 
@@ -1970,6 +1863,7 @@ async def execute_tool_action(
     except Exception as exc:
         return _failed_update(f"Frozen Tool action 校验失败: {exc}")
 
+    # 先查询 Action Journal：同一 action 的终态只回放结果，不重复触发外部副作用。
     record = await journal.get(action_key)
     if record is not None:
         identity_error = _journal_identity_error(
@@ -1993,6 +1887,7 @@ async def execute_tool_action(
             return _materialize_tool_call(state, record)
         authorized_attempt = record.attempt_count + 1
         has_one_shot_permit = record.authorized_retry_attempt == authorized_attempt
+        # STARTED 不是“没执行”的证明；非幂等动作必须获得人工一次性重试授权。
         if not replay_safe and not has_one_shot_permit:
             preview = redact_preview(action.arguments)
             await _trace(
@@ -2597,6 +2492,9 @@ def _build_action_level_graph(
     trace_recorder: TraceRecorderLike,
     finalizer: FinalAnswerGeneratorLike,
 ) -> CompiledStateGraph:
+    """装配生产用的 durable action-level Graph；节点顺序决定审批和 Journal 边界。"""
+
+    # 图节点拆开以保证每个动作都能单独 checkpoint，而不是在一个节点内循环工具调用。
     builder = StateGraph(TaskState)
     builder.add_node(
         "initialize_task",
@@ -2851,12 +2749,34 @@ def build_graph(
             trace_recorder=trace_recorder or NoOpTraceRecorder(),
             finalizer=finalizer or VerifiedResultsRenderer(),
         )
-    # Phase 1–8 的离线 Fake 只实现 execute；保留兼容图，不用于生产 CLI。
-    return _build_legacy_graph(
+    # 仅兼容早期只实现 execute() 的 Executor Fake，生产实例始终走上面的 durable Graph。
+    # 将旧图的装配代码移出核心文件；共享的节点实现保持原样，避免引入状态语义变化。
+    legacy_nodes = {
+        "initialize_task": initialize_task,
+        "analyze_task": analyze_task,
+        "plan_task": plan_task,
+        "execute_step": execute_step,
+        "prepare_approval": prepare_approval,
+        "human_approval": human_approval,
+        "execute_approved_action": execute_approved_action,
+        "handle_rejection": handle_rejection,
+        "verify_step": verify_step,
+        "advance_step": advance_step,
+        "verify_task": verify_task,
+        "finalize_terminal": finalize_terminal,
+        "_route_after_plan": _route_after_plan,
+        "_route_after_execute": _route_after_execute,
+        "_route_after_human_approval": _route_after_human_approval,
+        "_route_after_step_verification": _route_after_step_verification,
+        "_route_after_advance": _route_after_advance,
+        "_route_after_terminal_verification": _route_after_terminal_verification,
+    }
+    return build_legacy_graph(
         analyzer=active_analyzer,
         planner=active_planner,
         executor=active_executor,
         verifier=active_verifier,
         max_step_attempts=max_step_attempts,
         checkpointer=checkpointer,
+        nodes=legacy_nodes,
     )

@@ -313,6 +313,7 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     if (args.task is None) == (args.resume is None):
         parser.error("provide exactly one of TASK or --resume TASK_ID")
 
+    # CLI 只负责参数与展示，实际执行、恢复及安全校验统一交给 TaskPilotService。
     persistence_config = PersistenceConfig.from_state_dir(args.state_dir)
     mcp_configs = (
         load_mcp_server_configs(args.mcp_config) if args.mcp_config is not None else []

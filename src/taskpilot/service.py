@@ -317,6 +317,8 @@ class TaskPilotService:
             raise TaskConfigurationError(
                 "Task requires Browser but this Host has Browser disabled"
             )
+        # SQLite 可以恢复任务状态，但不能恢复原 Chromium Page / DOM。
+        # 如果中断指向 Browser 动作却失去了 live runtime，必须拒绝继续，不能盲点。
         live_runtime = self._live_runtimes.get(task_id)
         if (
             enable_browser
@@ -448,6 +450,8 @@ class TaskPilotService:
     ) -> _OpenRuntime:
         """构造可临时使用或跨 Browser approval 保留的完整 runtime。"""
 
+        # 每次运行单独构造工具注册表与资源栈，避免跨任务复用 Browser/MCP 句柄。
+        # AsyncExitStack 确保异常时也按相反顺序关闭 SQLite、Browser 与 MCP。
         registry = ToolRegistry()
         stack = AsyncExitStack()
         await stack.__aenter__()

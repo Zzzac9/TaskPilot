@@ -220,6 +220,31 @@ class TaskExecutor:
 
         return self._max_actions_per_step
 
+    @staticmethod
+    def _extract_single_tool_call(
+        response: Any, seen_call_ids: set[str]
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """统一校验模型的一次 Tool Call；不执行工具、不修改历史状态。
+
+        新版 action-level Graph 与旧版 step-level Executor 共享同一组输入边界，
+        避免两条路径分别维护格式检查而产生语义偏差。
+        """
+        if not isinstance(response, AIMessage):
+            return None, "Executor 模型未返回 AIMessage"
+        if len(response.tool_calls) != 1:
+            return (
+                None,
+                "Executor 每轮必须返回且只能返回一个 Tool Call; "
+                f"实际数量: {len(response.tool_calls)}",
+            )
+        raw = response.tool_calls[0]
+        call_id = raw.get("id")
+        if not call_id:
+            return None, "Executor Tool Call 缺少 tool_call_id"
+        if call_id in seen_call_ids:
+            return None, f"Executor Tool Call ID 重复: {call_id}"
+        return raw, None
+
     async def decide_action(
         self,
         *,
@@ -285,36 +310,19 @@ class TaskExecutor:
                 fatal_error=True,
                 context_snapshot=snapshot,
             )
-        if not isinstance(response, AIMessage):
-            return ExecutorDecisionResult(
-                error="Executor 模型未返回 AIMessage",
-                fatal_error=True,
-                context_snapshot=snapshot,
-            )
-        if len(response.tool_calls) != 1:
-            return ExecutorDecisionResult(
-                error=("Executor 每轮必须返回且只能返回一个 Tool Call; "
-                       f"实际数量: {len(response.tool_calls)}"),
-                fatal_error=True,
-                context_snapshot=snapshot,
-            )
-        raw = response.tool_calls[0]
-        call_id = raw.get("id")
-        if not call_id:
-            return ExecutorDecisionResult(
-                error="Executor Tool Call 缺少 tool_call_id", fatal_error=True
-                , context_snapshot=snapshot
-            )
+        # 校验完成前不允许产生执行副作用；旧版循环也调用此校验函数。
         seen_call_ids = (
             {record.call_id for record in tool_calls}
             | {record.call_id for record in approval_records}
             | {decision.call_id for decision in policy_decisions}
         )
-        if call_id in seen_call_ids:
+        raw, call_error = self._extract_single_tool_call(response, seen_call_ids)
+        if call_error is not None:
             return ExecutorDecisionResult(
-                error=f"Executor Tool Call ID 重复: {call_id}", fatal_error=True
-                , context_snapshot=snapshot
+                error=call_error, fatal_error=True, context_snapshot=snapshot
             )
+        assert raw is not None
+        call_id = raw["id"]
         name = raw["name"]
         arguments = raw["args"]
         if name == FINISH_STEP_NAME:
@@ -494,52 +502,23 @@ class TaskExecutor:
                     policy_decisions=new_decisions,
                     fatal_error=True,
                 )
-            if not isinstance(response, AIMessage):
+            # 与 durable Graph 共用同一校验，但旧循环仍由自己维护 seen ID 集合。
+            action, call_error = self._extract_single_tool_call(
+                response, seen_call_ids
+            )
+            if call_error is not None:
                 return self._error_result(
                     step_id=step.id,
                     action_count=action_count,
-                    error="Executor 模型未返回 AIMessage",
+                    error=call_error,
                     tool_calls=new_records,
                     policy_decisions=new_decisions,
                     fatal_error=True,
                 )
-
-            actions = response.tool_calls
-            if len(actions) != 1:
-                return self._error_result(
-                    step_id=step.id,
-                    action_count=action_count,
-                    error=(
-                        "Executor 每轮必须返回且只能返回一个 Tool Call; "
-                        f"实际数量: {len(actions)}"
-                    ),
-                    tool_calls=new_records,
-                    policy_decisions=new_decisions,
-                    fatal_error=True,
-                )
-
-            action = actions[0]
+            assert action is not None
             action_name = action["name"]
             arguments = action["args"]
-            call_id = action.get("id")
-            if not call_id:
-                return self._error_result(
-                    step_id=step.id,
-                    action_count=action_count,
-                    error="Executor Tool Call 缺少 tool_call_id",
-                    tool_calls=new_records,
-                    policy_decisions=new_decisions,
-                    fatal_error=True,
-                )
-            if call_id in seen_call_ids:
-                return self._error_result(
-                    step_id=step.id,
-                    action_count=action_count,
-                    error=f"Executor Tool Call ID 重复: {call_id}",
-                    tool_calls=new_records,
-                    policy_decisions=new_decisions,
-                    fatal_error=True,
-                )
+            call_id = action["id"]
             seen_call_ids.add(call_id)
 
             if action_name == FINISH_STEP_NAME:
