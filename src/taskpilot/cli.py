@@ -219,7 +219,9 @@ async def interactive_shell(args: argparse.Namespace) -> int:
     print("输入任务并回车；输入 /help 查看帮助，/exit 退出。")
     while True:
         try:
-            raw = await asyncio.to_thread(input, "taskpilot> ")
+            # Shell 在此刻没有并行任务：直接读取标准输入，使 Ctrl+C 可在本层捕获。
+            # asyncio.to_thread(input) 在 asyncio.run 收到 Ctrl+C 时容易产生 CancelledError traceback。
+            raw = input("taskpilot> ")
         except (EOFError, KeyboardInterrupt):
             print()
             return 0

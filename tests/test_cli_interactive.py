@@ -167,3 +167,19 @@ async def test_interactive_shell_contains_task_exception_and_continues(
 
     assert exit_code == 0
     assert run_once.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_interactive_shell_handles_ctrl_c_at_prompt_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """用户在等待输入时按 Ctrl+C，应正常退出且不运行新任务。"""
+    def interrupted_input(prompt: str = "") -> str:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", interrupted_input)
+    run_once = AsyncMock()
+    monkeypatch.setattr(cli, "async_main", run_once)
+
+    assert await cli.interactive_shell(shell_args()) == 0
+    run_once.assert_not_awaited()

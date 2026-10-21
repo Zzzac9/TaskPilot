@@ -47,6 +47,14 @@ from taskpilot.tools.registry import (
 
 FINISH_STEP_NAME = "finish_step"
 MAX_DUPLICATE_OBSERVATION_CORRECTIONS = 2
+
+# 部分兼容模型会忽略 Tool Calling，返回普通文本。
+# 仅允许补发一次格式纠偏请求；不能直接将文本视为 finish_step，更不能代替验证。
+EMPTY_TOOL_CALL_RETRY_PROMPT = (
+    "上一轮没有返回 Tool Call，当前 Executor 不接受普通文本作为动作。"
+    "请严格只返回一个合法的 Tool Call：若当前步骤已有真实证据则调用 finish_step，"
+    "否则调用一个可用的外部工具继续获取证据。不得虚构工具结果或额外执行任务。"
+)
 FINISH_STEP_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -121,7 +129,7 @@ class ApprovedActionResult:
 
 @dataclass(frozen=True)
 class ExecutorDecisionResult:
-    """一次且仅一次模型调用产生的 frozen action 或 fatal error。"""
+    """一次动作决策产生的 frozen action 或错误；零 Tool Call 时可纠偏一次。"""
 
     action: ExecutorAction | None = None
     error: str | None = None
@@ -245,6 +253,22 @@ class TaskExecutor:
             return None, f"Executor Tool Call ID 重复: {call_id}"
         return raw, None
 
+    @staticmethod
+    async def _invoke_model_action(
+        model_with_tools: Any, messages: Sequence[BaseMessage]
+    ) -> Any:
+        """只纠正空 Tool Call 响应，至多再调用模型一次且无外部工具副作用。
+
+        不修改原上下文，也不将模型的普通文字插入证据：下一次回复仍必须满足
+        _extract_single_tool_call 的格式、身份及后续 Schema/Policy 校验。
+        """
+        response = await model_with_tools.ainvoke(messages)
+        if isinstance(response, AIMessage) and not response.tool_calls:
+            response = await model_with_tools.ainvoke(
+                [*messages, HumanMessage(content=EMPTY_TOOL_CALL_RETRY_PROMPT)]
+            )
+        return response
+
     async def decide_action(
         self,
         *,
@@ -259,7 +283,7 @@ class TaskExecutor:
         approval_records: Sequence[ApprovalRecord] = (),
         executor_feedback: str | None = None,
     ) -> ExecutorDecisionResult:
-        """调用模型一次并冻结一个动作；绝不执行外部 Tool。"""
+        """决定并冻结一个动作；遇到空 Tool Call 最多纠偏一次，不执行外部 Tool。"""
 
         if action_index < 1:
             return ExecutorDecisionResult(
@@ -302,7 +326,9 @@ class TaskExecutor:
             ),
         ]
         try:
-            response = await self._model.bind_tools(schemas).ainvoke(messages)
+            response = await self._invoke_model_action(
+                self._model.bind_tools(schemas), messages
+            )
         except Exception as exc:
             detail = redact_sensitive_values(str(exc))
             return ExecutorDecisionResult(
@@ -488,7 +514,7 @@ class TaskExecutor:
         for action_index in range(self._max_actions_per_step):
             action_count = action_index + 1
             try:
-                response = await model_with_tools.ainvoke(messages)
+                response = await self._invoke_model_action(model_with_tools, messages)
             except Exception as exc:
                 error_detail = redact_sensitive_values(str(exc))
                 return self._error_result(

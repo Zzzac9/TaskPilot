@@ -171,6 +171,81 @@ def make_registry(tool: LookupTool | FailingTool | None = None) -> ToolRegistry:
 
 
 @pytest.mark.asyncio
+async def test_decide_action_retries_empty_tool_call_once_without_tool_side_effect() -> None:
+    """模拟模型首次输出普通文本，纠偏后必须通过原有 finish_step 校验。"""
+    model = FakeFunctionCallingModel(
+        [AIMessage(content="这里直接给你结果", tool_calls=[]), finish_call("retry-finish")]
+    )
+    registry = make_registry(LookupTool())
+    executor = TaskExecutor(registry=registry, model=cast(BaseChatModel, model))
+
+    result = await executor.decide_action(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        action_index=1,
+        task_results={},
+        tool_calls=[],
+    )
+
+    assert result.fatal_error is False
+    assert result.action is not None
+    assert result.action.call_id == "retry-finish"
+    assert result.action.action_type.value == "finish_step"
+    assert len(model.invocations) == 2
+    assert len(model.invocations[1]) == len(model.invocations[0]) + 1
+    assert "上一轮没有返回 Tool Call" in str(model.invocations[1][-1].content)
+
+
+@pytest.mark.asyncio
+async def test_decide_action_empty_tool_call_retry_is_bounded_and_fails_closed() -> None:
+    """连续无工具调用时，仍拒绝完成，不伪造 action。"""
+    model = FakeFunctionCallingModel(
+        [AIMessage(content="直接回答", tool_calls=[]), AIMessage(content="还是文本", tool_calls=[])]
+    )
+    executor = TaskExecutor(
+        registry=make_registry(LookupTool()),
+        model=cast(BaseChatModel, model),
+    )
+
+    result = await executor.decide_action(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        action_index=1,
+        task_results={},
+        tool_calls=[],
+    )
+
+    assert result.fatal_error is True
+    assert result.action is None
+    assert "实际数量: 0" in (result.error or "")
+    assert len(model.invocations) == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_executor_recovers_one_empty_tool_call_without_invoking_tool() -> None:
+    """兼容旧执行路径，不会为了纠偏产生额外外部工具副作用。"""
+    model = FakeFunctionCallingModel(
+        [AIMessage(content="纯文本", tool_calls=[]), finish_call("legacy-retry")]
+    )
+    executor = TaskExecutor(
+        registry=make_registry(LookupTool()),
+        model=cast(BaseChatModel, model),
+    )
+
+    result = await executor.execute(
+        task_spec=make_task_spec(),
+        step=make_step(),
+        task_results={},
+        tool_calls=[],
+    )
+
+    assert result.outcome is not None
+    assert result.outcome.claimed_complete is True
+    assert result.tool_calls == []
+    assert len(model.invocations) == 2
+
+
+@pytest.mark.asyncio
 async def test_executor_runs_tool_then_finish_step_with_linked_tool_message() -> None:
     model = FakeFunctionCallingModel(
         [
@@ -470,7 +545,10 @@ async def test_invalid_tool_arguments_return_clear_error() -> None:
 
 @pytest.mark.asyncio
 async def test_missing_action_is_not_treated_as_completion() -> None:
-    model = FakeFunctionCallingModel([AIMessage(content="I am done")])
+    # 两次都不按协议返回 Tool Call，必须保留 fail-closed 行为。
+    model = FakeFunctionCallingModel(
+        [AIMessage(content="I am done"), AIMessage(content="still no tool call")]
+    )
     executor = TaskExecutor(
         registry=make_registry(LookupTool()),
         model=cast(BaseChatModel, model),

@@ -1272,7 +1272,7 @@ async def decide_action(
     executor: TaskExecutor,
     trace_recorder: TraceRecorderLike,
 ) -> TaskStateUpdate:
-    """最多调用模型一次，并把 frozen ExecutorAction 写回 state。"""
+    """每次 Graph 决策只记录一个 frozen action；空 Tool Call 最多进行一次模型纠偏。"""
 
     step_id = state.get("current_step_id")
     task_spec = state.get("task_spec")
